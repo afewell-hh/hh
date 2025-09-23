@@ -1,0 +1,21 @@
+{
+    "Role": {
+        "Path": "/",
+        "RoleName": "hh-lambda-exec",
+        "RoleId": "AROA6EU5Z54N2A2VCZI6O",
+        "Arn": "arn:aws:iam::972067303195:role/hh-lambda-exec",
+        "CreateDate": "2025-09-21T20:24:41+00:00",
+        "AssumeRolePolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "lambda.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        }
+    }
+}

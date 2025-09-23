@@ -1,0 +1,19 @@
+{
+  "uid": "hh-webhooks",
+  "type": "webhooks",
+  "config": {
+    "settings": {
+      "targetUrl": "https://pc4x1xgehc.execute-api.us-west-2.amazonaws.com/webhook",
+      "maxConcurrentRequests": 5
+    },
+    "subscriptions": {
+      "legacyCrmObjects": [
+        {
+          "subscriptionType": "contact.propertyChange",
+          "propertyName": "download_requested",
+          "active": true
+        }
+      ]
+    }
+  }
+}

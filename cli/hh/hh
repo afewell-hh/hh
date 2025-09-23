@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import hashlib
+import tempfile
+
+DEFAULT_PORTAL = 'https://pc4x1xgehc.execute-api.us-west-2.amazonaws.com'
+
+# exit codes
+EC_SUCCESS = 0
+EC_DOCKER_MISSING = 10
+EC_DOCKER_PERMISSION = 11
+EC_HELPER_INSTALL_FAILED = 12
+EC_BIN_INSTALL_FAILED = 13
+EC_CHECKSUM_MISMATCH = 14
+EC_SANITY_FAILED = 20
+
+def ensure_hh_dir():
+    p = os.path.join(os.path.expanduser('~'), '.hh')
+    os.makedirs(p, exist_ok=True)
+    return p
+
+def write_config(portal_base, token):
+    p = ensure_hh_dir()
+    cfg = {'portal_base': portal_base, 'download_token': token}
+    with open(os.path.join(p, 'config.json'), 'w') as f:
+        json.dump(cfg, f)
+    print('wrote', os.path.join(p, 'config.json'))
+
+def read_config():
+    p = os.path.join(os.path.expanduser('~'), '.hh', 'config.json')
+    if not os.path.exists(p):
+        return None
+    with open(p, 'r') as f:
+        return json.load(f)
+
+def merge_docker_credhelper():
+    docker_dir = os.path.join(os.path.expanduser('~'), '.docker')
+    os.makedirs(docker_dir, exist_ok=True)
+    cfg_path = os.path.join(docker_dir, 'config.json')
+    if not os.path.exists(cfg_path):
+        with open(cfg_path, 'w') as f:
+            json.dump({}, f)
+    # backup
+    shutil.copyfile(cfg_path, cfg_path + '.bak')
+    with open(cfg_path, 'r') as f:
+        try:
+            cfg = json.load(f)
+        except Exception:
+            cfg = {}
+    cred = cfg.get('credHelpers', {}) or {}
+    cred['ghcr.io'] = 'hh'
+    cfg['credHelpers'] = cred
+    with open(cfg_path, 'w') as f:
+        json.dump(cfg, f, indent=2)
+    print('merged', cfg_path)
+
+def check_docker():
+    # ensure docker is available and accessible
+    d = shutil.which('docker')
+    if not d:
+        print('docker not found — please install Docker: https://docs.docker.com/get-docker/')
+        return False, 'missing'
+    # try version
+    try:
+        out = subprocess.check_output(['docker', 'version'], stderr=subprocess.STDOUT, timeout=10)
+    except subprocess.CalledProcessError as e:
+        s = e.output.decode('utf8', 'replace')
+        if 'permission denied' in s.lower():
+            print('permission denied on /var/run/docker.sock. Fix: sudo usermod -aG docker $USER ; newgrp docker')
+            return False, 'permission'
+        print('docker appears broken:', s)
+        return False, 'broken'
+    except Exception as e:
+        print('docker check failed:', str(e))
+        return False, 'error'
+    return True, 'ok'
+
+def ensure_helper_installed(prefix='/usr/local/bin', no_install=False):
+    if shutil.which('docker-credential-hh'):
+        print('docker-credential-hh already in PATH')
+        return True
+    local = os.path.join(os.getcwd(), 'cli', 'docker-credential-hh', 'docker-credential-hh')
+    if os.path.exists(local):
+        if no_install:
+            print('helper available at', local, 'but not installed system-wide (skipping due to --no-install)')
+            return True
+        dest = os.path.join(prefix, 'docker-credential-hh')
+        print('installing helper to', dest, '(requires sudo if prefix is protected)')
+        # prefix guardrails
+        if not os.access(prefix, os.W_OK):
+            if shutil.which('sudo'):
+                pass
+            else:
+                print('prefix is not writable and sudo is not available; cannot install helper to', prefix)
+                return False
+        try:
+            subprocess.check_call(['sudo', 'install', '-m', '0755', local, dest])
+            print('installed', dest)
+            return True
+        except subprocess.CalledProcessError:
+            print('sudo install failed; please run: sudo install -m 0755', local, dest)
+            return False
+    else:
+        print('no local helper found and none in PATH')
+        return False
+
+def run_sanity_pull(image, ignore_failure=False):
+    if not image:
+        print('no sanity image provided; skipping pull')
+        return True
+    # try logout then pull
+    subprocess.call(['docker', 'logout', 'ghcr.io'])
+    try:
+        subprocess.check_call(['docker', 'pull', image])
+        print('pulled', image)
+        return True
+    except subprocess.CalledProcessError as e:
+        out = str(e)
+        if 'manifest unknown' in out.lower() or 'manifest unknown' in e.__repr__().lower():
+            print('image/tag likely does not exist (manifest unknown):', image)
+            return ignore_failure
+        print('docker pull failed:', out)
+        return ignore_failure
+
+def cmd_login(args):
+    token = args.code
+    if not token:
+        token = input('pairing code: ').strip()
+    portal = args.portal or DEFAULT_PORTAL
+    write_config(portal, token)
+
+def cmd_download(args):
+    # deprecated flag handling
+    if getattr(args, 'no_install', False):
+        print('[deprecation] --no-install is ignored; use --no-hhfab/--no-oras/--no-helper', file=sys.stderr)
+    cfg = read_config()
+    if not cfg:
+        print('no ~/.hh/config.json; running login')
+        cmd_login(args)
+        cfg = read_config()
+    token = cfg.get('download_token')
+    portal = cfg.get('portal_base', DEFAULT_PORTAL)
+    if not token:
+        print('no download_token in ~/.hh/config.json; run hh login first')
+        return 1
+
+    # pre-flight checks
+    ok, reason = check_docker()
+    if not ok:
+        if reason == 'missing':
+            return 2
+        if reason == 'permission':
+            if not args.ignore_sanity_failure:
+                return 3
+    # ensure helper
+    if not args.no_helper:
+        if not ensure_helper_installed(prefix=args.prefix, no_install=args.no_install):
+            print('failed to ensure credential helper')
+            return 4
+    # merge docker config non-destructively
+    merge_docker_credhelper()
+
+    # install hhfab and oras
+    if not args.no_hhfab:
+        hhfab_url = args.hhfab_url
+        dest = os.path.join(args.prefix, 'hhfab')
+        print('installing hhfab ->', dest)
+        # prefix guardrails
+        if not os.access(args.prefix, os.W_OK) and not shutil.which('sudo'):
+            print('prefix is not writable and sudo is not available; cannot install hhfab to', args.prefix)
+            return EC_BIN_INSTALL_FAILED
+        try:
+            subprocess.check_call(['sudo', 'install', '-m', '0755', '/dev/null', dest]) if not shutil.which('curl') else subprocess.check_call(['bash','-c', f'curl -fsSL "{hhfab_url}" -o "{dest}" && chmod +x "{dest}"'])
+            # checksum
+            if args.sha256_hhfab:
+                print('verifying hhfab checksum')
+                with open(dest, 'rb') as fh:
+                    h = hashlib.sha256(fh.read()).hexdigest()
+                if h.lower() != args.sha256_hhfab.lower():
+                    print('checksum mismatch for hhfab', h, '!=', args.sha256_hhfab)
+                    return EC_CHECKSUM_MISMATCH
+            else:
+                print('No checksum provided; skipping verification.')
+        except subprocess.CalledProcessError as e:
+            print('hhfab install failed:', e)
+            return EC_BIN_INSTALL_FAILED
+    if not args.no_oras:
+        oras_url = args.oras_url
+        dest2 = os.path.join(args.prefix, 'oras')
+        print('installing oras ->', dest2)
+        if not os.access(args.prefix, os.W_OK) and not shutil.which('sudo'):
+            print('prefix is not writable and sudo is not available; cannot install oras to', args.prefix)
+            return EC_BIN_INSTALL_FAILED
+        try:
+            subprocess.check_call(['bash','-c', f'curl -fsSL "{oras_url}" -o "{dest2}" && chmod +x "{dest2}"'])
+            if args.sha256_oras:
+                print('verifying oras checksum')
+                with open(dest2, 'rb') as fh:
+                    h2 = hashlib.sha256(fh.read()).hexdigest()
+                if h2.lower() != args.sha256_oras.lower():
+                    print('checksum mismatch for oras', h2, '!=', args.sha256_oras)
+                    return EC_CHECKSUM_MISMATCH
+            else:
+                print('No checksum provided; skipping verification.')
+        except subprocess.CalledProcessError as e:
+            print('oras install failed:', e)
+            return EC_BIN_INSTALL_FAILED
+
+    # sanity pull
+    if args.sanity:
+        ok_pull = run_sanity_pull(args.sanity, ignore_failure=args.ignore_sanity_failure)
+        if not ok_pull:
+            return 7
+
+    # friendly message
+    print('\n✅ hh is ready.')
+    print('\nNext steps:')
+    print('  mkdir -p ~/hhfab-dir && cd ~/hhfab-dir')
+    print('  hhfab init --dev')
+    print('  hhfab vlab gen')
+    print('  hhfab build')
+    return EC_SUCCESS
+
+def main():
+    p = argparse.ArgumentParser(prog='hh')
+    sp = p.add_subparsers(dest='cmd')
+
+    p_login = sp.add_parser('login')
+    p_login.add_argument('--code')
+    p_login.add_argument('--portal')
+    p_login.set_defaults(func=cmd_login)
+
+    p_down = sp.add_parser('download', help='Install helper and optional binaries; see examples below',
+                           description='Install helper and optional binaries')
+    p_down.add_argument('--sanity')
+    p_down.add_argument('--ignore-sanity-failure', action='store_true')
+    p_down.add_argument('--prefix', default='/usr/local/bin')
+    p_down.add_argument('--hhfab-url', dest='hhfab_url', default='https://i.hhdev.io/hhfab')
+    p_down.add_argument('--oras-url', dest='oras_url', default='https://i.hhdev.io/oras')
+    p_down.add_argument('--sha256-hhfab', dest='sha256_hhfab')
+    p_down.add_argument('--sha256-oras', dest='sha256_oras')
+    p_down.add_argument('--no-hhfab', action='store_true')
+    p_down.add_argument('--no-oras', action='store_true')
+    p_down.add_argument('--no-helper', action='store_true')
+    # deprecated: accept but hide --no-install
+    p_down.add_argument('--no-install', action='store_true', help=argparse.SUPPRESS)
+    # examples
+    p_down.epilog = 'Examples:\n  hh download --no-hhfab --no-oras      # only install the Docker helper\n  hh download --sanity ghcr.io/ORG/IMG:TAG'
+    p_down.set_defaults(func=cmd_download)
+
+    args = p.parse_args()
+    if not args.cmd:
+        p.print_help()
+        sys.exit(2)
+    args.func(args)
+
+if __name__ == '__main__':
+    main()
