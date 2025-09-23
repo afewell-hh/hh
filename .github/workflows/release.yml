@@ -14,15 +14,85 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: '1.21'
-      - name: Build credential helper
+      - name: Build credential helper multi-arch
         run: |
           cd cli/docker-credential-hh
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o docker-credential-hh main.go
+          # Build AMD64 binary
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o docker-credential-hh-linux-amd64 main.go
+          chmod +x docker-credential-hh-linux-amd64
+          # Build ARM64 binary
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o docker-credential-hh-linux-arm64 main.go
+          chmod +x docker-credential-hh-linux-arm64
+          # Keep legacy binary for backwards compatibility
+          cp docker-credential-hh-linux-amd64 docker-credential-hh
           chmod +x docker-credential-hh
+      - name: Create shell script fallback
+        run: |
+          cd cli/docker-credential-hh
+          cat > docker-credential-hh.sh << 'EOF'
+          #!/bin/bash
+          # Universal shell script fallback for docker-credential-hh
+          # This script calls the appropriate architecture-specific binary
+
+          set -e
+
+          # Detect architecture
+          ARCH=$(uname -m)
+          case "$ARCH" in
+              x86_64|amd64)
+                  BINARY_ARCH="linux-amd64"
+                  ;;
+              aarch64|arm64)
+                  BINARY_ARCH="linux-arm64"
+                  ;;
+              *)
+                  echo "Unsupported architecture: $ARCH" >&2
+                  exit 1
+                  ;;
+          esac
+
+          # Find the credential helper binary
+          BINARY_NAME="docker-credential-hh-${BINARY_ARCH}"
+          HELPER_PATH=""
+
+          # Search in common locations
+          for path in "/usr/local/bin" "$HOME/.local/bin" "$(dirname "$0")"; do
+              if [ -x "$path/$BINARY_NAME" ]; then
+                  HELPER_PATH="$path/$BINARY_NAME"
+                  break
+              fi
+          done
+
+          if [ -z "$HELPER_PATH" ]; then
+              echo "docker-credential-hh binary not found for $BINARY_ARCH" >&2
+              exit 1
+          fi
+
+          # Execute the appropriate binary with all arguments
+          exec "$HELPER_PATH" "$@"
+          EOF
+          chmod +x docker-credential-hh.sh
+      - name: Inject build metadata into hh CLI
+        run: |
+          # Get version from tag
+          VERSION="${{ github.ref_name }}"
+          # Get short commit SHA
+          COMMIT=$(git rev-parse --short HEAD)
+          # Get build date in ISO format
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Replace the version placeholders in the hh script
+          sed -i "s/HH_VERSION = os.environ.get('HH_BUILD_VERSION', 'v0.1.5-dev')/HH_VERSION = os.environ.get('HH_BUILD_VERSION', '${VERSION}')/" cli/hh/hh
+          sed -i "s/HH_COMMIT = os.environ.get('HH_BUILD_COMMIT', 'unknown')/HH_COMMIT = os.environ.get('HH_BUILD_COMMIT', '${COMMIT}')/" cli/hh/hh
+          sed -i "s/HH_BUILD_DATE = os.environ.get('HH_BUILD_DATE', 'unknown')/HH_BUILD_DATE = os.environ.get('HH_BUILD_DATE', '${BUILD_DATE}')/" cli/hh/hh
       - name: Generate checksums
         run: |
           cd cli/docker-credential-hh
+          # Generate checksums for all binaries and shell script
           sha256sum docker-credential-hh > docker-credential-hh.sha256
+          sha256sum docker-credential-hh-linux-amd64 > docker-credential-hh-linux-amd64.sha256
+          sha256sum docker-credential-hh-linux-arm64 > docker-credential-hh-linux-arm64.sha256
+          sha256sum docker-credential-hh.sh > docker-credential-hh.sh.sha256
           cd ../../scripts
           sha256sum install-hh.sh > install-hh.sh.sha256
           cd ../cli/hh
@@ -32,6 +102,9 @@ jobs:
           chmod +x scripts/install-hh.sh
           chmod +x cli/hh/hh
           chmod +x cli/docker-credential-hh/docker-credential-hh
+          chmod +x cli/docker-credential-hh/docker-credential-hh-linux-amd64
+          chmod +x cli/docker-credential-hh/docker-credential-hh-linux-arm64
+          chmod +x cli/docker-credential-hh/docker-credential-hh.sh
       - name: Create GitHub Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
@@ -46,3 +119,9 @@ jobs:
             cli/hh/hh.sha256
             cli/docker-credential-hh/docker-credential-hh
             cli/docker-credential-hh/docker-credential-hh.sha256
+            cli/docker-credential-hh/docker-credential-hh-linux-amd64
+            cli/docker-credential-hh/docker-credential-hh-linux-amd64.sha256
+            cli/docker-credential-hh/docker-credential-hh-linux-arm64
+            cli/docker-credential-hh/docker-credential-hh-linux-arm64.sha256
+            cli/docker-credential-hh/docker-credential-hh.sh
+            cli/docker-credential-hh/docker-credential-hh.sh.sha256

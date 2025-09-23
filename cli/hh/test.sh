@@ -34,6 +34,86 @@ python3 $HERE/hh download --no-hhfab --no-oras --no-helper || true
 echo "Running hh download (install helper + merge docker config)"
 python3 $HERE/hh download --no-hhfab --no-oras || true
 
+echo "=== Testing auto-install functionality ==="
+
+# Test auto-install with no helper present and no local build
+echo "Testing auto-install from GitHub releases"
+TMP_HOME2=$(mktemp -d)
+export OLD_HOME=$HOME
+export HOME=$TMP_HOME2
+mkdir -p $HOME/.hh
+cp $OLD_HOME/.hh/config.json $HOME/.hh/config.json
+
+# Remove helper from PATH temporarily
+export OLD_PATH=$PATH
+export PATH=$(echo $PATH | sed "s|$HERE/cli/docker-credential-hh:||g")
+
+# Rename local helper to simulate no local build
+if [ -f "$HERE/cli/docker-credential-hh/docker-credential-hh" ]; then
+    mv "$HERE/cli/docker-credential-hh/docker-credential-hh" "$HERE/cli/docker-credential-hh/docker-credential-hh.backup"
+fi
+
+echo "Running hh download with no local helper (should auto-download)"
+cd $TMP_HOME2  # Change directory to avoid finding local helper
+python3 $HERE/cli/hh/hh download --no-hhfab --no-oras --prefix "$HOME/.local/bin" || echo "Auto-install test completed (may fail due to network or missing release)"
+
+# Check if helper was installed
+if [ -x "$HOME/.local/bin/docker-credential-hh" ]; then
+    echo "✓ Auto-install successful: helper installed to $HOME/.local/bin/docker-credential-hh"
+    # Test the installed helper
+    echo -n ghcr.io | "$HOME/.local/bin/docker-credential-hh" get 2>&1 | grep -q "lease error: 401" && echo "✓ Downloaded helper works correctly" || echo "Downloaded helper test: unexpected response"
+else
+    echo "Auto-install: helper not installed (may be expected if network/release not available)"
+fi
+
+# Test arch detection
+echo "Testing architecture detection"
+python3 -c "
+import sys
+sys.path.insert(0, '$HERE/cli/hh')
+import hh
+arch = hh.detect_arch()
+print(f'Detected architecture: {arch}')
+if arch:
+    url, checksum_url, arch_type = hh.get_default_helper_urls()
+    print(f'Default helper URL: {url}')
+    print(f'Checksum URL: {checksum_url}')
+    print(f'Architecture type: {arch_type}')
+else:
+    print('No specific architecture detected, will use shell fallback')
+"
+
+# Test with forced architecture (if HH_FORCE_ARCH is supported)
+echo "Testing forced architecture selection"
+export HH_FORCE_ARCH=linux-arm64
+python3 -c "
+import sys
+sys.path.insert(0, '$HERE/cli/hh')
+import hh
+import os
+if 'HH_FORCE_ARCH' in os.environ:
+    # Temporarily override detect_arch for testing
+    original_detect_arch = hh.detect_arch
+    def mock_detect_arch():
+        return os.environ['HH_FORCE_ARCH']
+    hh.detect_arch = mock_detect_arch
+
+    url, checksum_url, arch_type = hh.get_default_helper_urls()
+    print(f'Forced arch URL: {url}')
+    print(f'Expected: docker-credential-hh-linux-arm64')
+    assert 'linux-arm64' in url, f'Expected linux-arm64 in URL, got {url}'
+    print('✓ Forced architecture test passed')
+"
+unset HH_FORCE_ARCH
+
+# Restore helper and environment
+if [ -f "$HERE/cli/docker-credential-hh/docker-credential-hh.backup" ]; then
+    mv "$HERE/cli/docker-credential-hh/docker-credential-hh.backup" "$HERE/cli/docker-credential-hh/docker-credential-hh"
+fi
+export PATH=$OLD_PATH
+export HOME=$OLD_HOME
+rm -rf $TMP_HOME2
+
 # Test credential helper with user config (expect failure due to fake token)
 echo "Testing credential helper with user config"
 echo -n ghcr.io | docker-credential-hh get 2>&1 | grep -q "lease error: 401" && echo "User mode credential helper OK (expected 401 with test token)" || echo "User mode credential helper: unexpected response (may be OK)"
@@ -80,6 +160,27 @@ if sudo -n true 2>/dev/null; then
     # Test hh download --system
     echo "Testing hh download --system"
     python3 $HERE/hh download --system --no-hhfab --no-oras || true
+
+    # Test system mode auto-install
+    echo "Testing system mode auto-install"
+    # Create a temp HOME with no helper for system mode test
+    TMP_SYSTEM_HOME=$(mktemp -d)
+    sudo mkdir -p "$TMP_SYSTEM_HOME/.hh"
+    sudo cp /etc/hh/config.json "$TMP_SYSTEM_HOME/.hh/" 2>/dev/null || echo "No system config to copy"
+
+    # Test system mode auto-install (may require network)
+    sudo -E env HOME="$TMP_SYSTEM_HOME" PATH="$(echo $PATH | sed "s|$HERE/cli/docker-credential-hh:||g")" python3 $HERE/cli/hh/hh download --system --no-hhfab --no-oras || echo "System auto-install test completed (may fail due to permissions or network)"
+
+    # Verify system-wide helper installation
+    if [ -x "/usr/local/bin/docker-credential-hh" ]; then
+        echo "✓ System mode auto-install successful"
+        # Test with system config
+        sudo -E env HH_CONFIG=/etc/hh/config.json bash -c 'echo -n ghcr.io | docker-credential-hh get' 2>&1 | grep -q "lease error: 401" && echo "✓ System helper works with system config" || echo "System helper test: unexpected response"
+    else
+        echo "System auto-install: helper not installed (may be expected)"
+    fi
+
+    sudo rm -rf "$TMP_SYSTEM_HOME"
 
     # Check if root docker config was modified
     if sudo test -f /root/.docker/config.json; then

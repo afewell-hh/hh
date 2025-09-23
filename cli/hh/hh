@@ -8,8 +8,16 @@ import sys
 import hashlib
 import tempfile
 import stat
+import platform
+import urllib.request
 
 DEFAULT_PORTAL = 'https://pc4x1xgehc.execute-api.us-west-2.amazonaws.com'
+DEFAULT_HELPER_BASE_URL = 'https://github.com/afewell-hh/hh/releases/latest/download'
+
+# Version info - populated by CI build
+HH_VERSION = os.environ.get('HH_BUILD_VERSION', 'v0.1.5-dev')
+HH_COMMIT = os.environ.get('HH_BUILD_COMMIT', 'unknown')
+HH_BUILD_DATE = os.environ.get('HH_BUILD_DATE', 'unknown')
 
 # exit codes
 EC_SUCCESS = 0
@@ -25,6 +33,42 @@ def ensure_hh_dir():
     p = os.path.join(os.path.expanduser('~'), '.hh')
     os.makedirs(p, exist_ok=True)
     return p
+
+def detect_arch():
+    """Detect system architecture and return normalized arch string"""
+    machine = platform.machine().lower()
+    if machine in ('x86_64', 'amd64'):
+        return 'linux-amd64'
+    elif machine in ('aarch64', 'arm64'):
+        return 'linux-arm64'
+    else:
+        # Fallback for unknown architectures
+        return None
+
+def get_default_helper_urls():
+    """Get default helper URLs based on detected architecture"""
+    arch = detect_arch()
+
+    # Try arch-specific binary first
+    if arch:
+        helper_url = f"{DEFAULT_HELPER_BASE_URL}/docker-credential-hh-{arch}"
+        checksum_url = f"{DEFAULT_HELPER_BASE_URL}/docker-credential-hh-{arch}.sha256"
+        return helper_url, checksum_url, arch
+
+    # Fallback to universal shell script
+    helper_url = f"{DEFAULT_HELPER_BASE_URL}/docker-credential-hh.sh"
+    checksum_url = f"{DEFAULT_HELPER_BASE_URL}/docker-credential-hh.sh.sha256"
+    return helper_url, checksum_url, "shell"
+
+def fetch_checksum(checksum_url):
+    """Fetch checksum from URL, return None if not available"""
+    try:
+        with urllib.request.urlopen(checksum_url) as response:
+            checksum_data = response.read().decode('utf-8').strip()
+            # Extract just the hash (first part before any whitespace)
+            return checksum_data.split()[0] if checksum_data else None
+    except Exception:
+        return None
 
 def write_config(portal_base, token, system_mode=False):
     p = ensure_hh_dir()
@@ -182,11 +226,11 @@ def check_docker():
         print('docker check failed:', str(e))
         return False, 'error'
 
-def download_and_verify_helper(helper_url, checksum=None):
+def download_and_verify_helper(helper_url, checksum=None, is_shell_script=False):
     """Download helper from release URL and verify checksum if provided"""
     print(f'downloading helper from {helper_url}')
     try:
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.sh' if is_shell_script else '') as tmp:
             subprocess.check_call(['curl', '-fsSL', helper_url, '-o', tmp.name])
             if checksum:
                 print('verifying helper checksum')
@@ -196,6 +240,8 @@ def download_and_verify_helper(helper_url, checksum=None):
                     print(f'checksum mismatch for helper {h} != {checksum}')
                     os.unlink(tmp.name)
                     return None
+            else:
+                print('no checksum provided; skipping verification')
             return tmp.name
     except subprocess.CalledProcessError as e:
         print(f'failed to download helper: {e}')
@@ -222,13 +268,36 @@ def ensure_helper_installed(prefix='/usr/local/bin', no_install=False, helper_ur
         print(f'using local helper at {local}')
         helper_source = local
     elif helper_url:
-        # Download from release
+        # Download from provided URL
         helper_source = download_and_verify_helper(helper_url, sha256_helper)
         if not helper_source:
             return False
     else:
-        print('no local helper found and no download URL provided')
-        return False
+        # Auto-install: try to fetch from GitHub releases
+        default_url, checksum_url, arch_type = get_default_helper_urls()
+        print(f'credential helper not found — fetching from release ({arch_type})...')
+
+        # Try to fetch checksum first
+        checksum = fetch_checksum(checksum_url)
+        if not checksum:
+            print('no checksum found; skipping verification')
+
+        # Try arch-specific binary first
+        helper_source = download_and_verify_helper(default_url, checksum, is_shell_script=(arch_type == "shell"))
+
+        # If arch-specific binary fails and we haven't tried shell script yet, try shell fallback
+        if not helper_source and arch_type != "shell":
+            print(f'arch-specific binary ({arch_type}) not available, trying shell fallback...')
+            fallback_url = f"{DEFAULT_HELPER_BASE_URL}/docker-credential-hh.sh"
+            fallback_checksum_url = f"{DEFAULT_HELPER_BASE_URL}/docker-credential-hh.sh.sha256"
+            fallback_checksum = fetch_checksum(fallback_checksum_url)
+            if not fallback_checksum:
+                print('no checksum found for shell fallback; skipping verification')
+            helper_source = download_and_verify_helper(fallback_url, fallback_checksum, is_shell_script=True)
+
+        if not helper_source:
+            print('failed to download credential helper from release')
+            return False
 
     if no_install:
         print(f'helper available but not installing system-wide (--no-install)')
@@ -291,6 +360,14 @@ def run_sanity_pull(image, ignore_failure=False):
             return ignore_failure
         print('docker pull failed:', out)
         return ignore_failure
+
+def cmd_version(args):
+    """Print version information"""
+    print(f'hh {HH_VERSION}')
+    if HH_COMMIT != 'unknown':
+        print(f'commit: {HH_COMMIT}')
+    if HH_BUILD_DATE != 'unknown':
+        print(f'built: {HH_BUILD_DATE}')
 
 def cmd_login(args):
     token = args.code
@@ -409,7 +486,11 @@ def cmd_download(args):
 
 def main():
     p = argparse.ArgumentParser(prog='hh')
+    p.add_argument('--version', action='store_true', help='Show version information')
     sp = p.add_subparsers(dest='cmd')
+
+    p_version = sp.add_parser('version', help='Show version information')
+    p_version.set_defaults(func=cmd_version)
 
     p_login = sp.add_parser('login')
     p_login.add_argument('--code')
@@ -439,6 +520,12 @@ def main():
     p_down.set_defaults(func=cmd_download)
 
     args = p.parse_args()
+
+    # Handle --version flag
+    if args.version:
+        cmd_version(args)
+        return
+
     if not args.cmd:
         p.print_help()
         sys.exit(2)

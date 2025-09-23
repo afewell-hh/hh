@@ -13,11 +13,17 @@ installer
 
 	This writes `~/.hh/config.json` with your `portal_base` and `download_token`.
 
+	To verify installation: `hh --version` or `hh version`
+
 3) Install helper and optional tools
 
 	hh download
 
-	By default this will install the Docker credential helper and optionally `hhfab` and `oras` to `/usr/local/bin`.
+	By default this will:
+	- Auto-download the Docker credential helper from GitHub releases if not present locally
+	- Install architecture-specific binaries (linux-amd64, linux-arm64) with shell script fallback
+	- Install `hhfab` and `oras` tools to `/usr/local/bin`
+	- Configure Docker credential helpers for `ghcr.io`
 
 4) Next steps
 
@@ -58,6 +64,18 @@ The credential helper searches for configuration in this order:
 3. `$XDG_CONFIG_HOME/hh/config.json` (if set)
 4. `$HOME/.hh/config.json` (user)
 
+## Auto-Install Behavior
+
+`hh download` automatically fetches the credential helper from GitHub releases if not found locally:
+
+1. **Architecture Detection**: Detects system architecture (x86_64 → linux-amd64, aarch64 → linux-arm64)
+2. **Binary Download**: Attempts to download arch-specific binary: `docker-credential-hh-linux-amd64` or `docker-credential-hh-linux-arm64`
+3. **Checksum Verification**: Verifies download integrity using `.sha256` files when available
+4. **Shell Fallback**: Falls back to universal `docker-credential-hh.sh` if arch-specific binary unavailable
+5. **Installation**: Installs to `/usr/local/bin` (requires sudo) or `~/.local/bin` (with PATH hint) as fallback
+
+No extra flags required - just run `hh download` and it handles everything automatically.
+
 ## Examples
 
 ### Install only the Docker helper
@@ -69,3 +87,10 @@ The credential helper searches for configuration in this order:
 ### System mode for CI/hardened environments
 	hh login --system --code "CODE"
 	hh download --system
+
+### Manual helper download (override auto-install)
+	hh download --helper-url https://github.com/afewell-hh/hh/releases/latest/download/docker-credential-hh-linux-amd64 --sha256-helper <checksum>
+
+### Version information
+	hh --version
+	hh version
