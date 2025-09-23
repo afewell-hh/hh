@@ -32,8 +32,12 @@ exports.handler = async function(event) {
     const hit = data.results && data.results[0];
     const props = hit && hit.properties ? hit.properties : {};
     // download_enabled may be 'false' or unset; treat missing as enabled
-    if ((props.download_enabled || '').toString() === 'false') {
-      console.log(`lease_denied reason=disabled contactId=${hit.id}`);
+    const downloadEnabled = (props.download_enabled || '').toString();
+    const email = props.email || '';
+    const maskedEmail = email.includes('@') ? email.replace(/^(.).+(@.*)$/, '$1***$2') : (email ? '***' : '');
+
+    if (downloadEnabled === 'false') {
+      console.log(`lease_denied reason=disabled contactId=${hit.id} email=${maskedEmail}`);
       return { statusCode: 403, body: JSON.stringify({ error: 'disabled' }) };
     }
 
@@ -41,9 +45,7 @@ exports.handler = async function(event) {
     const p = process.env.GHCR_PAT;
     if (!u || !p) return { statusCode: 500, body: JSON.stringify({ error: 'missing ghcr creds' }) };
 
-  // mask email local part for logs
-  const email = props.email || '';
-  const maskedEmail = email.includes('@') ? email.replace(/^(.).+(@.*)$/, '$1***$2') : (email ? '***' : '');
+  // log success with masked email
   console.log(`lease_ok contactId=${hit.id} email=${maskedEmail}`);
 
   const body = JSON.stringify({ ServerURL: 'ghcr.io', Username: u, Secret: p });
