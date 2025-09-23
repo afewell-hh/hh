@@ -29,7 +29,13 @@ else
   sudo install -m 0755 "${tmp}/hh" "$dst"
 fi
 
-echo "Installed hh to ${dst}"
+echo "✅ Successfully installed hh to ${dst}"
 "$dst" --help >/dev/null 2>&1 || echo "note: run 'hh --help' to verify, ensure python3 is available"
 
-echo "Done."
+echo ""
+echo "🚀 Next steps:"
+echo "   1. Get your pairing code from the download email"
+echo "   2. Run: hh login --code \"<YOUR_PAIRING_CODE>\""
+echo "   3. Run: hh download"
+echo ""
+echo "Need help? Check the docs or reply to the download email."
