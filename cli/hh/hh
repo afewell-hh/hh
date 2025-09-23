@@ -7,6 +7,7 @@ import subprocess
 import sys
 import hashlib
 import tempfile
+import stat
 
 DEFAULT_PORTAL = 'https://pc4x1xgehc.execute-api.us-west-2.amazonaws.com'
 
@@ -17,6 +18,7 @@ EC_DOCKER_PERMISSION = 11
 EC_HELPER_INSTALL_FAILED = 12
 EC_BIN_INSTALL_FAILED = 13
 EC_CHECKSUM_MISMATCH = 14
+EC_DOCKER_SUDO_REQUIRED = 15
 EC_SANITY_FAILED = 20
 
 def ensure_hh_dir():
@@ -24,12 +26,55 @@ def ensure_hh_dir():
     os.makedirs(p, exist_ok=True)
     return p
 
-def write_config(portal_base, token):
+def write_config(portal_base, token, system_mode=False):
     p = ensure_hh_dir()
     cfg = {'portal_base': portal_base, 'download_token': token}
-    with open(os.path.join(p, 'config.json'), 'w') as f:
+
+    # Always write user config
+    user_config_path = os.path.join(p, 'config.json')
+    with open(user_config_path, 'w') as f:
         json.dump(cfg, f)
-    print('wrote', os.path.join(p, 'config.json'))
+    print('wrote', user_config_path)
+
+    # Also write system config if system mode
+    if system_mode:
+        write_system_config(portal_base, token)
+
+def write_system_config(portal_base, token):
+    system_dir = '/etc/hh'
+    system_config_path = os.path.join(system_dir, 'config.json')
+
+    # Prepare config with normalized field names for system mode
+    cfg = {
+        'edge_auth': token,  # Use edge_auth for system config
+        'lease_url': portal_base,  # Use lease_url for system config
+        'token': token,  # Include token for backwards compatibility
+        'portal_base': portal_base  # Include portal_base for backwards compatibility
+    }
+
+    try:
+        # Create system directory (requires sudo)
+        subprocess.check_call(['sudo', 'mkdir', '-p', system_dir])
+
+        # Write config to temp file first
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as tmp:
+            json.dump(cfg, tmp, indent=2)
+            tmp_path = tmp.name
+
+        # Move to system location with proper permissions (requires sudo)
+        subprocess.check_call(['sudo', 'mv', tmp_path, system_config_path])
+        subprocess.check_call(['sudo', 'chown', 'root:root', system_config_path])
+        subprocess.check_call(['sudo', 'chmod', '0640', system_config_path])
+
+        print(f'wrote {system_config_path} (system)')
+
+    except subprocess.CalledProcessError as e:
+        print(f'failed to write system config: {e}')
+        print('sudo access required for system mode')
+        sys.exit(1)
+    except Exception as e:
+        print(f'error writing system config: {e}')
+        sys.exit(1)
 
 def read_config():
     p = os.path.join(os.path.expanduser('~'), '.hh', 'config.json')
@@ -38,7 +83,8 @@ def read_config():
     with open(p, 'r') as f:
         return json.load(f)
 
-def merge_docker_credhelper():
+def merge_docker_credhelper(system_mode=False):
+    # Always merge user Docker config
     docker_dir = os.path.join(os.path.expanduser('~'), '.docker')
     os.makedirs(docker_dir, exist_ok=True)
     cfg_path = os.path.join(docker_dir, 'config.json')
@@ -59,54 +105,173 @@ def merge_docker_credhelper():
         json.dump(cfg, f, indent=2)
     print('merged', cfg_path)
 
+    # Also merge system Docker config if system mode
+    if system_mode:
+        merge_system_docker_config()
+
+def merge_system_docker_config():
+    """Merge credHelpers into /root/.docker/config.json for sudo docker support"""
+    system_docker_dir = '/root/.docker'
+    system_cfg_path = os.path.join(system_docker_dir, 'config.json')
+
+    try:
+        # Create system docker directory
+        subprocess.check_call(['sudo', 'mkdir', '-p', system_docker_dir])
+
+        # Check if config exists
+        config_exists = subprocess.call(['sudo', 'test', '-f', system_cfg_path]) == 0
+
+        if not config_exists:
+            # Create empty config
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as tmp:
+                json.dump({}, tmp)
+                tmp_path = tmp.name
+            subprocess.check_call(['sudo', 'mv', tmp_path, system_cfg_path])
+        else:
+            # Backup existing config
+            subprocess.check_call(['sudo', 'cp', system_cfg_path, system_cfg_path + '.bak'])
+
+        # Read current config
+        try:
+            result = subprocess.check_output(['sudo', 'cat', system_cfg_path])
+            cfg = json.loads(result.decode('utf-8'))
+        except (subprocess.CalledProcessError, json.JSONDecodeError):
+            cfg = {}
+
+        # Merge credHelpers
+        cred = cfg.get('credHelpers', {}) or {}
+        cred['ghcr.io'] = 'hh'
+        cfg['credHelpers'] = cred
+
+        # Write updated config
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as tmp:
+            json.dump(cfg, tmp, indent=2)
+            tmp_path = tmp.name
+
+        subprocess.check_call(['sudo', 'mv', tmp_path, system_cfg_path])
+        subprocess.check_call(['sudo', 'chown', 'root:root', system_cfg_path])
+        subprocess.check_call(['sudo', 'chmod', '0600', system_cfg_path])
+
+        print(f'merged {system_cfg_path} (system)')
+
+    except subprocess.CalledProcessError as e:
+        print(f'failed to merge system Docker config: {e}')
+        print('continuing without system Docker config')
+    except Exception as e:
+        print(f'error merging system Docker config: {e}')
+        print('continuing without system Docker config')
+
 def check_docker():
     # ensure docker is available and accessible
     d = shutil.which('docker')
     if not d:
         print('docker not found — please install Docker: https://docs.docker.com/get-docker/')
         return False, 'missing'
-    # try version
+
+    # First try docker info (preferred over docker version)
     try:
-        out = subprocess.check_output(['docker', 'version'], stderr=subprocess.STDOUT, timeout=10)
+        subprocess.check_output(['docker', 'info'], stderr=subprocess.STDOUT, timeout=10)
+        return True, 'ok'
     except subprocess.CalledProcessError as e:
         s = e.output.decode('utf8', 'replace')
-        if 'permission denied' in s.lower():
-            print('permission denied on /var/run/docker.sock. Fix: sudo usermod -aG docker $USER ; newgrp docker')
+        if 'permission denied' in s.lower() or 'connect to the docker daemon socket' in s.lower():
             return False, 'permission'
         print('docker appears broken:', s)
         return False, 'broken'
     except Exception as e:
         print('docker check failed:', str(e))
         return False, 'error'
-    return True, 'ok'
 
-def ensure_helper_installed(prefix='/usr/local/bin', no_install=False):
+def download_and_verify_helper(helper_url, checksum=None):
+    """Download helper from release URL and verify checksum if provided"""
+    print(f'downloading helper from {helper_url}')
+    try:
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            subprocess.check_call(['curl', '-fsSL', helper_url, '-o', tmp.name])
+            if checksum:
+                print('verifying helper checksum')
+                with open(tmp.name, 'rb') as fh:
+                    h = hashlib.sha256(fh.read()).hexdigest()
+                if h.lower() != checksum.lower():
+                    print(f'checksum mismatch for helper {h} != {checksum}')
+                    os.unlink(tmp.name)
+                    return None
+            return tmp.name
+    except subprocess.CalledProcessError as e:
+        print(f'failed to download helper: {e}')
+        return None
+
+def ensure_helper_installed(prefix='/usr/local/bin', no_install=False, helper_url=None, sha256_helper=None):
+    helper_path = os.path.join(prefix, 'docker-credential-hh')
+
+    # Check if already installed
+    if os.path.exists(helper_path):
+        print(f'docker-credential-hh already installed at {helper_path}')
+        return True
+
+    # Check if in PATH (different location)
     if shutil.which('docker-credential-hh'):
         print('docker-credential-hh already in PATH')
         return True
+
+    # Try local build first
     local = os.path.join(os.getcwd(), 'cli', 'docker-credential-hh', 'docker-credential-hh')
+    helper_source = None
+
     if os.path.exists(local):
-        if no_install:
-            print('helper available at', local, 'but not installed system-wide (skipping due to --no-install)')
-            return True
-        dest = os.path.join(prefix, 'docker-credential-hh')
-        print('installing helper to', dest, '(requires sudo if prefix is protected)')
-        # prefix guardrails
-        if not os.access(prefix, os.W_OK):
-            if shutil.which('sudo'):
-                pass
-            else:
-                print('prefix is not writable and sudo is not available; cannot install helper to', prefix)
-                return False
-        try:
-            subprocess.check_call(['sudo', 'install', '-m', '0755', local, dest])
-            print('installed', dest)
-            return True
-        except subprocess.CalledProcessError:
-            print('sudo install failed; please run: sudo install -m 0755', local, dest)
+        print(f'using local helper at {local}')
+        helper_source = local
+    elif helper_url:
+        # Download from release
+        helper_source = download_and_verify_helper(helper_url, sha256_helper)
+        if not helper_source:
             return False
     else:
-        print('no local helper found and none in PATH')
+        print('no local helper found and no download URL provided')
+        return False
+
+    if no_install:
+        print(f'helper available but not installing system-wide (--no-install)')
+        if helper_source != local:
+            os.unlink(helper_source)
+        return True
+
+    # Install helper
+    print(f'installing helper to {helper_path}')
+
+    # Check if we can write to prefix
+    if not os.access(prefix, os.W_OK):
+        if not shutil.which('sudo'):
+            print(f'prefix {prefix} is not writable and sudo not available')
+            # Try fallback to ~/.local/bin
+            fallback_prefix = os.path.join(os.path.expanduser('~'), '.local', 'bin')
+            os.makedirs(fallback_prefix, exist_ok=True)
+            fallback_path = os.path.join(fallback_prefix, 'docker-credential-hh')
+
+            try:
+                shutil.copy2(helper_source, fallback_path)
+                os.chmod(fallback_path, 0o755)
+                print(f'installed helper to {fallback_path}')
+                print(f'add {fallback_prefix} to your PATH: export PATH={fallback_prefix}:$PATH')
+                if helper_source != local:
+                    os.unlink(helper_source)
+                return True
+            except Exception as e:
+                print(f'failed to install to fallback location: {e}')
+                if helper_source != local:
+                    os.unlink(helper_source)
+                return False
+
+    try:
+        subprocess.check_call(['sudo', 'install', '-m', '0755', helper_source, helper_path])
+        print(f'installed {helper_path}')
+        if helper_source != local:
+            os.unlink(helper_source)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f'failed to install helper: {e}')
+        if helper_source != local:
+            os.unlink(helper_source)
         return False
 
 def run_sanity_pull(image, ignore_failure=False):
@@ -132,12 +297,14 @@ def cmd_login(args):
     if not token:
         token = input('pairing code: ').strip()
     portal = args.portal or DEFAULT_PORTAL
-    write_config(portal, token)
+    system_mode = getattr(args, 'system', False)
+    write_config(portal, token, system_mode)
 
 def cmd_download(args):
     # deprecated flag handling
     if getattr(args, 'no_install', False):
         print('[deprecation] --no-install is ignored; use --no-hhfab/--no-oras/--no-helper', file=sys.stderr)
+
     cfg = read_config()
     if not cfg:
         print('no ~/.hh/config.json; running login')
@@ -149,21 +316,35 @@ def cmd_download(args):
         print('no download_token in ~/.hh/config.json; run hh login first')
         return 1
 
-    # pre-flight checks
+    system_mode = getattr(args, 'system', False)
+
+    # pre-flight checks: Docker permissions
     ok, reason = check_docker()
     if not ok:
         if reason == 'missing':
-            return 2
+            return EC_DOCKER_MISSING
         if reason == 'permission':
-            if not args.ignore_sanity_failure:
-                return 3
+            print('Docker requires elevated privileges. Choose one:')
+            print('  (a) Recommended: sudo usermod -aG docker $USER && newgrp docker')
+            print('  (b) System mode: hh login --system && hh download --system')
+            if not system_mode and not args.ignore_sanity_failure:
+                return EC_DOCKER_SUDO_REQUIRED
+
     # ensure helper
     if not args.no_helper:
-        if not ensure_helper_installed(prefix=args.prefix, no_install=args.no_install):
+        helper_url = getattr(args, 'helper_url', None)
+        sha256_helper = getattr(args, 'sha256_helper', None)
+        if not ensure_helper_installed(
+            prefix=args.prefix,
+            no_install=getattr(args, 'no_install', False),
+            helper_url=helper_url,
+            sha256_helper=sha256_helper
+        ):
             print('failed to ensure credential helper')
-            return 4
+            return EC_HELPER_INSTALL_FAILED
+
     # merge docker config non-destructively
-    merge_docker_credhelper()
+    merge_docker_credhelper(system_mode)
 
     # install hhfab and oras
     if not args.no_hhfab:
@@ -233,6 +414,7 @@ def main():
     p_login = sp.add_parser('login')
     p_login.add_argument('--code')
     p_login.add_argument('--portal')
+    p_login.add_argument('--system', action='store_true', help='Write config to /etc/hh/config.json for sudo docker support')
     p_login.set_defaults(func=cmd_login)
 
     p_down = sp.add_parser('download', help='Install helper and optional binaries; see examples below',
@@ -240,6 +422,9 @@ def main():
     p_down.add_argument('--sanity')
     p_down.add_argument('--ignore-sanity-failure', action='store_true')
     p_down.add_argument('--prefix', default='/usr/local/bin')
+    p_down.add_argument('--system', action='store_true', help='Configure for sudo docker support (requires system config)')
+    p_down.add_argument('--helper-url', dest='helper_url', help='URL to download credential helper from release')
+    p_down.add_argument('--sha256-helper', dest='sha256_helper', help='SHA256 checksum for credential helper')
     p_down.add_argument('--hhfab-url', dest='hhfab_url', default='https://i.hhdev.io/hhfab')
     p_down.add_argument('--oras-url', dest='oras_url', default='https://i.hhdev.io/oras')
     p_down.add_argument('--sha256-hhfab', dest='sha256_hhfab')
@@ -250,7 +435,7 @@ def main():
     # deprecated: accept but hide --no-install
     p_down.add_argument('--no-install', action='store_true', help=argparse.SUPPRESS)
     # examples
-    p_down.epilog = 'Examples:\n  hh download --no-hhfab --no-oras      # only install the Docker helper\n  hh download --sanity ghcr.io/ORG/IMG:TAG'
+    p_down.epilog = 'Examples:\n  hh download --no-hhfab --no-oras      # only install the Docker helper\n  hh download --sanity ghcr.io/ORG/IMG:TAG\n  hh download --system                  # configure for sudo docker'
     p_down.set_defaults(func=cmd_download)
 
     args = p.parse_args()

@@ -38,8 +38,11 @@ aws lambda wait function-updated-v2 --function-name hh-authz
 ```
 
 Update releases/installer with the new default value and instruct existing customers to:
-- Re-run `hh login`, or
-- Manually edit `~/.hh/config.json` to update the `edge_auth` field
+- Re-run `hh login` (user mode), or
+- Re-run `hh login --system` (system mode), or
+- Manually edit config files to update the `edge_auth` field:
+  - User mode: `~/.hh/config.json`
+  - System mode: `/etc/hh/config.json`
 
 ## HTTP Response Codes
 
@@ -96,9 +99,47 @@ fields @timestamp, type, where, detail
 | limit 50
 ```
 
+## File Locations
+
+### System Config Files
+- System configuration: `/etc/hh/config.json` (requires sudo, readable by root)
+- System credential helper: `/usr/local/bin/docker-credential-hh`
+- Root Docker config: `/root/.docker/config.json` (for sudo docker commands)
+
+### User Config Files
+- User configuration: `~/.hh/config.json` (standard user mode)
+- User Docker config: `~/.docker/config.json`
+- XDG config: `$XDG_CONFIG_HOME/hh/config.json` (if XDG_CONFIG_HOME is set)
+
+### Environment Variables
+- `HH_CONFIG`: Override config file path (highest precedence)
+- `XDG_CONFIG_HOME`: XDG base directory specification
+
 ## Where to check
 
 - **HubSpot Webhooks monitor**: Projects → Webhooks monitor
 - **Lambda logs**: CloudWatch logs for `/aws/lambda/hh-webhook` and `/aws/lambda/hh-lease`
   - Look for structured JSON logs: `lease_ok`, `lease_denied`, `lease_error`
 - **WAF metrics**: CloudWatch metrics for rate limiting
+
+## Troubleshooting Docker Permission Issues
+
+### User reports "permission denied" on docker commands
+
+1. **Preferred solution**: Add user to docker group
+   ```bash
+   sudo usermod -aG docker $USER && newgrp docker
+   ```
+
+2. **Alternative for CI/hardened environments**: Use system mode
+   ```bash
+   hh login --system --code "PAIRING_CODE"
+   hh download --system
+   ```
+
+### System mode not working
+
+- Verify system config exists: `sudo cat /etc/hh/config.json`
+- Check credential helper installation: `ls -la /usr/local/bin/docker-credential-hh`
+- Verify root Docker config: `sudo cat /root/.docker/config.json`
+- Test helper with system config: `sudo -E env HH_CONFIG=/etc/hh/config.json docker-credential-hh get`

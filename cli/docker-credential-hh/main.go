@@ -8,12 +8,20 @@ import (
     "io"
     "net/http"
     "os"
+    "path/filepath"
     "strings"
 )
 
 type Config struct {
     PortalBase   string `json:"portal_base"`
     DownloadToken string `json:"download_token"`
+    // Support additional field names for backwards compatibility
+    EdgeAuth    string `json:"edge_auth"`
+    LeaseURL    string `json:"lease_url"`
+    BaseURL     string `json:"base_url"`
+    URL         string `json:"url"`
+    Token       string `json:"token"`
+    Code        string `json:"code"`
 }
 
 func readStdin() (string, error) {
@@ -24,21 +32,86 @@ func readStdin() (string, error) {
     return strings.TrimSpace(string(b)), nil
 }
 
+func getConfigPaths() []string {
+    var paths []string
+
+    // 1. Environment override
+    if envConfig := os.Getenv("HH_CONFIG"); envConfig != "" {
+        paths = append(paths, envConfig)
+    }
+
+    // 2. System config
+    paths = append(paths, "/etc/hh/config.json")
+
+    // 3. XDG config home
+    if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
+        paths = append(paths, filepath.Join(xdgConfig, "hh", "config.json"))
+    }
+
+    // 4. User home config
+    if home := os.Getenv("HOME"); home != "" {
+        paths = append(paths, filepath.Join(home, ".hh", "config.json"))
+    }
+
+    return paths
+}
+
 func loadConfig() (*Config, error) {
-    p := os.ExpandEnv("$HOME/.hh/config.json")
-    f, err := os.Open(p)
-    if err != nil {
-        return nil, err
+    paths := getConfigPaths()
+
+    var lastErr error
+    for _, p := range paths {
+        f, err := os.Open(p)
+        if err != nil {
+            lastErr = err
+            continue
+        }
+        defer f.Close()
+
+        var c Config
+        if err := json.NewDecoder(f).Decode(&c); err != nil {
+            f.Close()
+            lastErr = err
+            continue
+        }
+        f.Close()
+
+        // Normalize config fields - support multiple field names for backwards compatibility
+        if c.PortalBase == "" {
+            if c.LeaseURL != "" {
+                c.PortalBase = c.LeaseURL
+            } else if c.BaseURL != "" {
+                c.PortalBase = c.BaseURL
+            } else if c.URL != "" {
+                c.PortalBase = c.URL
+            }
+        }
+
+        if c.DownloadToken == "" {
+            if c.Token != "" {
+                c.DownloadToken = c.Token
+            } else if c.Code != "" {
+                c.DownloadToken = c.Code
+            }
+        }
+
+        // Validate required fields
+        if c.PortalBase == "" {
+            lastErr = errors.New("missing portal_base/lease_url/base_url/url in config")
+            continue
+        }
+        if c.DownloadToken == "" {
+            lastErr = errors.New("missing download_token/token/code in config")
+            continue
+        }
+
+        return &c, nil
     }
-    defer f.Close()
-    var c Config
-    if err := json.NewDecoder(f).Decode(&c); err != nil {
-        return nil, err
+
+    if lastErr != nil {
+        return nil, fmt.Errorf("failed to load config from any path: %v", lastErr)
     }
-    if c.PortalBase == "" || c.DownloadToken == "" {
-        return nil, errors.New("incomplete config")
-    }
-    return &c, nil
+    return nil, errors.New("no config files found")
 }
 
 func normalizeServer(s string) string {

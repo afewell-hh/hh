@@ -10,10 +10,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+      - name: Build credential helper
+        run: |
+          cd cli/docker-credential-hh
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o docker-credential-hh main.go
+          chmod +x docker-credential-hh
+      - name: Generate checksums
+        run: |
+          cd cli/docker-credential-hh
+          sha256sum docker-credential-hh > docker-credential-hh.sha256
+          cd ../../scripts
+          sha256sum install-hh.sh > install-hh.sh.sha256
+          cd ../cli/hh
+          sha256sum hh > hh.sha256
       - name: Make assets executable
         run: |
           chmod +x scripts/install-hh.sh
           chmod +x cli/hh/hh
+          chmod +x cli/docker-credential-hh/docker-credential-hh
       - name: Create GitHub Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
@@ -23,4 +41,8 @@ jobs:
           prerelease: false
           files: |
             scripts/install-hh.sh
+            scripts/install-hh.sh.sha256
             cli/hh/hh
+            cli/hh/hh.sha256
+            cli/docker-credential-hh/docker-credential-hh
+            cli/docker-credential-hh/docker-credential-hh.sha256
