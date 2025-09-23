@@ -15,7 +15,7 @@ DEFAULT_PORTAL = 'https://pc4x1xgehc.execute-api.us-west-2.amazonaws.com'
 DEFAULT_HELPER_BASE_URL = 'https://github.com/afewell-hh/hh/releases/latest/download'
 
 # Version info - populated by CI build
-HH_VERSION = os.environ.get('HH_BUILD_VERSION', 'v0.1.5-dev')
+HH_VERSION = os.environ.get('HH_BUILD_VERSION', 'v0.1.6-dev')
 HH_COMMIT = os.environ.get('HH_BUILD_COMMIT', 'unknown')
 HH_BUILD_DATE = os.environ.get('HH_BUILD_DATE', 'unknown')
 
@@ -69,6 +69,69 @@ def fetch_checksum(checksum_url):
             return checksum_data.split()[0] if checksum_data else None
     except Exception:
         return None
+
+def download_and_install_binary(url, binary_name, prefix, checksum=None, retry_count=1):
+    """Download binary to temp file and install with proper permissions"""
+    dest = os.path.join(prefix, binary_name)
+    print(f'installing {binary_name} -> {dest}')
+
+    # Check prefix permissions and prepare fallback
+    use_sudo = False
+    if not os.access(prefix, os.W_OK):
+        if shutil.which('sudo'):
+            use_sudo = True
+        else:
+            # Fallback to ~/.local/bin
+            fallback_prefix = os.path.join(os.path.expanduser('~'), '.local', 'bin')
+            os.makedirs(fallback_prefix, exist_ok=True)
+            dest = os.path.join(fallback_prefix, binary_name)
+            print(f'prefix not writable and sudo not available; installing to {dest}')
+            print(f'add {fallback_prefix} to your PATH: export PATH={fallback_prefix}:$PATH')
+
+    # Download to temp file with retry
+    for attempt in range(retry_count + 1):
+        try:
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                print(f'downloading {binary_name} from {url} (attempt {attempt + 1})')
+                subprocess.check_call(['curl', '-fsSL', url, '-o', tmp.name])
+
+                # Verify checksum if provided
+                if checksum:
+                    print(f'verifying {binary_name} checksum')
+                    with open(tmp.name, 'rb') as fh:
+                        h = hashlib.sha256(fh.read()).hexdigest()
+                    if h.lower() != checksum.lower():
+                        print(f'checksum mismatch for {binary_name}: {h} != {checksum}')
+                        os.unlink(tmp.name)
+                        return False
+                else:
+                    print(f'no checksum provided for {binary_name}; skipping verification')
+
+                # Install binary
+                if use_sudo:
+                    subprocess.check_call(['sudo', 'install', '-m', '0755', tmp.name, dest])
+                else:
+                    shutil.copy2(tmp.name, dest)
+                    os.chmod(dest, 0o755)
+
+                os.unlink(tmp.name)
+                print(f'installed {dest}')
+                return True
+
+        except subprocess.CalledProcessError as e:
+            if attempt < retry_count:
+                print(f'{binary_name} download failed (attempt {attempt + 1}), retrying...')
+                continue
+            else:
+                print(f'{binary_name} install failed: {e}')
+                if 'tmp' in locals():
+                    try:
+                        os.unlink(tmp.name)
+                    except:
+                        pass
+                return False
+
+    return False
 
 def write_config(portal_base, token, system_mode=False):
     p = ensure_hh_dir()
@@ -361,6 +424,58 @@ def run_sanity_pull(image, ignore_failure=False):
         print('docker pull failed:', out)
         return ignore_failure
 
+def run_oras_sanity_check():
+    """Run ORAS sanity check with a public image"""
+    oras_binary = shutil.which('oras')
+    if not oras_binary:
+        print('oras not found; skipping ORAS sanity check')
+        return True
+
+    # Test with a known public image
+    test_image = 'ghcr.io/githedgehog/fabricator/hhfab-linux-amd64:v0.41.3'
+    print(f'testing ORAS with public image: {test_image}')
+
+    try:
+        # Try to pull with ORAS (this should work with anonymous access)
+        result = subprocess.run(
+            ['oras', 'pull', test_image, '--dry-run'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode == 0:
+            print('✓ ORAS sanity check passed')
+            return True
+        else:
+            # Check if it's an auth issue
+            if 'authentication' in result.stderr.lower() or 'unauthorized' in result.stderr.lower():
+                print('⚠ Credential helper could not lease a token; falling back to anonymous.')
+                print('  If this is a private repo, ensure your pairing code is valid.')
+                # Try without credential helper
+                env = os.environ.copy()
+                env.pop('DOCKER_CONFIG', None)  # Remove Docker config to bypass credential helper
+                result_anon = subprocess.run(
+                    ['oras', 'pull', test_image, '--dry-run'],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    env=env
+                )
+                if result_anon.returncode == 0:
+                    print('✓ Anonymous fallback works')
+                    return True
+
+            print(f'ORAS sanity check failed: {result.stderr.strip()}')
+            return False
+
+    except subprocess.TimeoutExpired:
+        print('ORAS sanity check timed out')
+        return False
+    except Exception as e:
+        print(f'ORAS sanity check error: {e}')
+        return False
+
 def cmd_version(args):
     """Print version information"""
     print(f'hh {HH_VERSION}')
@@ -425,48 +540,22 @@ def cmd_download(args):
 
     # install hhfab and oras
     if not args.no_hhfab:
-        hhfab_url = args.hhfab_url
-        dest = os.path.join(args.prefix, 'hhfab')
-        print('installing hhfab ->', dest)
-        # prefix guardrails
-        if not os.access(args.prefix, os.W_OK) and not shutil.which('sudo'):
-            print('prefix is not writable and sudo is not available; cannot install hhfab to', args.prefix)
-            return EC_BIN_INSTALL_FAILED
-        try:
-            subprocess.check_call(['sudo', 'install', '-m', '0755', '/dev/null', dest]) if not shutil.which('curl') else subprocess.check_call(['bash','-c', f'curl -fsSL "{hhfab_url}" -o "{dest}" && chmod +x "{dest}"'])
-            # checksum
-            if args.sha256_hhfab:
-                print('verifying hhfab checksum')
-                with open(dest, 'rb') as fh:
-                    h = hashlib.sha256(fh.read()).hexdigest()
-                if h.lower() != args.sha256_hhfab.lower():
-                    print('checksum mismatch for hhfab', h, '!=', args.sha256_hhfab)
-                    return EC_CHECKSUM_MISMATCH
-            else:
-                print('No checksum provided; skipping verification.')
-        except subprocess.CalledProcessError as e:
-            print('hhfab install failed:', e)
+        if not download_and_install_binary(
+            args.hhfab_url,
+            'hhfab',
+            args.prefix,
+            checksum=args.sha256_hhfab,
+            retry_count=1
+        ):
             return EC_BIN_INSTALL_FAILED
     if not args.no_oras:
-        oras_url = args.oras_url
-        dest2 = os.path.join(args.prefix, 'oras')
-        print('installing oras ->', dest2)
-        if not os.access(args.prefix, os.W_OK) and not shutil.which('sudo'):
-            print('prefix is not writable and sudo is not available; cannot install oras to', args.prefix)
-            return EC_BIN_INSTALL_FAILED
-        try:
-            subprocess.check_call(['bash','-c', f'curl -fsSL "{oras_url}" -o "{dest2}" && chmod +x "{dest2}"'])
-            if args.sha256_oras:
-                print('verifying oras checksum')
-                with open(dest2, 'rb') as fh:
-                    h2 = hashlib.sha256(fh.read()).hexdigest()
-                if h2.lower() != args.sha256_oras.lower():
-                    print('checksum mismatch for oras', h2, '!=', args.sha256_oras)
-                    return EC_CHECKSUM_MISMATCH
-            else:
-                print('No checksum provided; skipping verification.')
-        except subprocess.CalledProcessError as e:
-            print('oras install failed:', e)
+        if not download_and_install_binary(
+            args.oras_url,
+            'oras',
+            args.prefix,
+            checksum=args.sha256_oras,
+            retry_count=1
+        ):
             return EC_BIN_INSTALL_FAILED
 
     # sanity pull
@@ -474,6 +563,10 @@ def cmd_download(args):
         ok_pull = run_sanity_pull(args.sanity, ignore_failure=args.ignore_sanity_failure)
         if not ok_pull:
             return 7
+
+    # ORAS sanity check (optional)
+    if args.oras_sanity:
+        run_oras_sanity_check()  # Always continue regardless of result
 
     # friendly message
     print('\n✅ hh is ready.')
@@ -502,6 +595,7 @@ def main():
                            description='Install helper and optional binaries')
     p_down.add_argument('--sanity')
     p_down.add_argument('--ignore-sanity-failure', action='store_true')
+    p_down.add_argument('--oras-sanity', action='store_true', help='Test ORAS with public image after installation')
     p_down.add_argument('--prefix', default='/usr/local/bin')
     p_down.add_argument('--system', action='store_true', help='Configure for sudo docker support (requires system config)')
     p_down.add_argument('--helper-url', dest='helper_url', help='URL to download credential helper from release')

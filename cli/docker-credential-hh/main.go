@@ -159,29 +159,38 @@ func getLease(c *Config) (map[string]string, int, error) {
 func cmdGet() int {
     server, err := readStdin()
     if err != nil {
-        fmt.Fprintln(os.Stderr, "failed read stdin:", err)
+        // Minimal stderr output for ORAS compatibility
+        fmt.Fprintln(os.Stderr, "failed read stdin")
         return 1
     }
+
     if !isGHCR(server) {
-        fmt.Fprintln(os.Stderr, "not a ghcr server")
+        // Exit quietly for non-GHCR servers to allow fallback
         return 1
     }
+
     cfg, err := loadConfig()
     if err != nil {
-        fmt.Fprintln(os.Stderr, "failed load config:", err)
+        // No config available - exit quietly to allow anonymous fallback
         return 1
     }
+
     creds, status, err := getLease(cfg)
     if err != nil {
-        fmt.Fprintln(os.Stderr, "lease error:", status, err)
+        // For authentication failures (401/403/404), exit quietly to allow anonymous fallback
+        if status == 401 || status == 403 || status == 404 || status >= 400 {
+            return 1
+        }
+        // For other errors (network, etc.), provide minimal feedback
+        fmt.Fprintln(os.Stderr, "lease error")
         return 1
     }
-    // Docker expects JSON with Username and Secret
+
+    // Only print JSON on success - this is what Docker/ORAS expects
     out := map[string]string{"Username": creds["Username"], "Secret": creds["Secret"]}
     enc := json.NewEncoder(os.Stdout)
     enc.SetEscapeHTML(false)
     if err := enc.Encode(out); err != nil {
-        fmt.Fprintln(os.Stderr, "encode error:", err)
         return 1
     }
     return 0
