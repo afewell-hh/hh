@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.1.10] - 2025-09-24
+
+### Changed
+- Simplified authentication flow: removed authorizer from /lease endpoint
+- Helper now only sends X-Download-Token header (no more X-Edge-Auth)
+- Login writes minimal config: only lease_url and token (no edge_auth dependency)
+- Improved reliability and reduced authentication complexity
+
 ## [v0.1.9] - 2025-09-24
 
 ### Fixed
