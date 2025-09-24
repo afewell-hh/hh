@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.1.9] - 2025-09-24
+
+### Fixed
+- Helper now prints credentials on successful lease (was previously returning empty output)
+- Added dual header support: helper sends both X-Edge-Auth (for authorizer) and X-Download-Token (for lease function)
+- Fixed ServerURL field in credential helper output for Docker/ORAS compatibility
+- hh doctor now correctly reports "Helper returned credentials: OK" for working setups
+
+### Added
+- Complete end-to-end credential flow working from helper through authenticated registry pulls
+
 ## [v0.1.8] - 2025-09-24
 
 ### Fixed

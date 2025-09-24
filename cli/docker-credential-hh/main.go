@@ -88,12 +88,12 @@ func loadConfig() (*Config, error) {
             }
         }
 
-        if c.EdgeAuth != "" {
-            c.DownloadToken = c.EdgeAuth
-        } else if c.Token != "" {
-            c.DownloadToken = c.Token
-        } else if c.DownloadToken == "" {
-            if c.Code != "" {
+        // Keep EdgeAuth separate for X-Edge-Auth header
+        // Set DownloadToken for X-Download-Token header (prioritize Token over legacy fields)
+        if c.DownloadToken == "" {
+            if c.Token != "" {
+                c.DownloadToken = c.Token
+            } else if c.Code != "" {
                 c.DownloadToken = c.Code
             }
         }
@@ -105,6 +105,10 @@ func loadConfig() (*Config, error) {
         }
         if c.DownloadToken == "" {
             lastErr = errors.New("missing download_token/token/code in config")
+            continue
+        }
+        if c.EdgeAuth == "" {
+            lastErr = errors.New("missing edge_auth in config")
             continue
         }
 
@@ -149,6 +153,7 @@ func getLease(c *Config) (map[string]string, int, error) {
         return nil, 0, err
     }
     req.Header.Set("X-Download-Token", c.DownloadToken)
+    req.Header.Set("X-Edge-Auth", c.EdgeAuth)
     client := &http.Client{}
     resp, err := client.Do(req)
     if err != nil {
@@ -212,7 +217,7 @@ func cmdGet() int {
     debugf("lease successful, returning credentials")
 
     // Only print JSON on success - this is what Docker/ORAS expects
-    out := map[string]string{"Username": creds["Username"], "Secret": creds["Secret"]}
+    out := map[string]string{"ServerURL": creds["ServerURL"], "Username": creds["Username"], "Secret": creds["Secret"]}
     enc := json.NewEncoder(os.Stdout)
     enc.SetEscapeHTML(false)
     if err := enc.Encode(out); err != nil {
