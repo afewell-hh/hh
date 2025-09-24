@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.1.12] - 2025-09-24
+
+### Changed
+- Migrate to AWS Secrets Manager for HubSpot & GHCR credentials
+- Helper: token-only auth; removed authorizer requirement
+- hh download: verified ORAS stays ELF binary format; robust auto-install
+- hh doctor: adds helper/ORAS checks for improved diagnostics
+
+### Security
+- All secrets now stored in AWS Secrets Manager (no plaintext in Lambda environment)
+- Support for zero-downtime secret rotation without redeploy
+
 ## [v0.1.11] - 2025-09-24
 
 ### Fixed
