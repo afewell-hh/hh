@@ -105,3 +105,10 @@ All sensitive credentials are stored securely in AWS Secrets Manager:
 - Lambda functions retrieve secrets at runtime using IAM roles
 - No plaintext secrets are stored in Lambda environment variables
 - Supports zero-downtime secret rotation without redeployment
+- To force immediate refresh after rotation, update `CACHE_BUSTER` env on the Lambda
+
+### Rate limiting
+
+The API Gateway has throttling configured to prevent abuse:
+- Burst limit: 50 requests per second
+- Sustained rate: 25 requests per second
