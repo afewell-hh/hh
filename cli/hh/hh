@@ -15,7 +15,7 @@ DEFAULT_PORTAL = 'https://pc4x1xgehc.execute-api.us-west-2.amazonaws.com'
 DEFAULT_HELPER_BASE_URL = 'https://github.com/afewell-hh/hh/releases/latest/download'
 
 # Version info - populated by CI build
-HH_VERSION = os.environ.get('HH_BUILD_VERSION', 'v0.1.10')
+HH_VERSION = os.environ.get('HH_BUILD_VERSION', 'v0.1.11')
 HH_COMMIT = os.environ.get('HH_BUILD_COMMIT', 'unknown')
 HH_BUILD_DATE = os.environ.get('HH_BUILD_DATE', 'unknown')
 

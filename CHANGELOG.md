@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.1.11] - 2025-09-24
+
+### Fixed
+- `hh download` now compatible with minimal config format (reads `token` field instead of `download_token`)
+
 ## [v0.1.10] - 2025-09-24
 
 ### Changed
