@@ -19,13 +19,38 @@ Look for `minted_token <contactId> <token>` in CloudWatch.
 
 Set the contact property `download_enabled` to `false`. The `/lease` endpoint will return 403 and CloudWatch will show `lease_denied`.
 
-## Rotate GHCR PAT
+## Rotate Secrets (AWS Secrets Manager)
 
-Update the `GHCR_PAT` environment variable on the `hh-lease` Lambda and redeploy:
+Secrets are now stored in AWS Secrets Manager and rotated without Lambda redeployment.
+
+### Rotate HubSpot token
 
 ```bash
-aws lambda update-function-configuration --function-name hh-lease --environment Variables={GHCR_PAT=<NEW_PAT>}
+aws secretsmanager put-secret-value \
+  --secret-id /hh/prod/hubspot/token \
+  --secret-string '{"token":"<NEW_TOKEN>"}' \
+  --region us-west-2
 ```
+
+### Rotate GHCR PAT
+
+```bash
+aws secretsmanager put-secret-value \
+  --secret-id /hh/prod/ghcr/creds \
+  --secret-string '{"username":"hh-partner","pat":"<NEW_PAT>"}' \
+  --region us-west-2
+```
+
+### Rotate HubSpot App Secret
+
+```bash
+aws secretsmanager put-secret-value \
+  --secret-id /hh/prod/hubspot/app_secret \
+  --secret-string '{"secret":"<NEW_SECRET>"}' \
+  --region us-west-2
+```
+
+**Note:** Cache TTL is ~5 minutes. To force immediate refresh, publish a new Lambda version or trigger UpdateFunctionCode (usually not needed).
 
 ## Rotate EDGE_SHARED_SECRET
 

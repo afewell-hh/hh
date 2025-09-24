@@ -1,13 +1,15 @@
-const fetch = globalThis.fetch || require('node-fetch');
+import { getJsonSecret } from "./secret.js";
+const fetch = globalThis.fetch;
 
 // Simple /lease handler: verifies header, queries HubSpot for contact with download_token, returns GHCR creds
-exports.handler = async function(event) {
+export const handler = async function(event) {
   try {
     const headers = event.headers || {};
     const token = headers['x-download-token'] || headers['X-Download-Token'];
     if (!token) return { statusCode: 401, body: JSON.stringify({ error: 'missing token' }) };
 
-    const hs = process.env.HS_TOKEN;
+    const HUBSPOT_TOKEN_NAME = process.env.HH_SECR_ARN_HUBSPOT_TOKEN; // /hh/prod/hubspot/token
+    const { token: hs } = await getJsonSecret(HUBSPOT_TOKEN_NAME);
     if (!hs) return { statusCode: 500, body: JSON.stringify({ error: 'missing hs token' }) };
 
     const base = 'https://api.hubapi.com';
@@ -41,8 +43,8 @@ exports.handler = async function(event) {
       return { statusCode: 403, body: JSON.stringify({ error: 'disabled' }) };
     }
 
-    const u = process.env.GHCR_USER;
-    const p = process.env.GHCR_PAT;
+    const GHCR_CREDS_NAME = process.env.HH_SECR_ARN_GHCR_CREDS;    // /hh/prod/ghcr/creds
+    const { username: u, pat: p } = await getJsonSecret(GHCR_CREDS_NAME);
     if (!u || !p) return { statusCode: 500, body: JSON.stringify({ error: 'missing ghcr creds' }) };
 
   // log success with masked email

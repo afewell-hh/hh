@@ -1,4 +1,5 @@
-const crypto = require('crypto');
+import crypto from 'crypto';
+import { getJsonSecret } from "./secret.js";
 
 function buildRequestUrl(evt) {
   const q = evt.rawQueryString ? `?${evt.rawQueryString}` : '';
@@ -28,8 +29,12 @@ function verifyV3(evt, appSecret) {
   }
 }
 
-exports.handler = async function(event) {
-  const secret = process.env.HS_APP_SECRET;
+export const handler = async function(event) {
+  const HS_APP_SECRET_NAME = process.env.HH_SECR_ARN_HUBSPOT_APP;   // /hh/prod/hubspot/app_secret
+  const HS_TOKEN_NAME     = process.env.HH_SECR_ARN_HUBSPOT_TOKEN;  // /hh/prod/hubspot/token
+
+  // Get app secret for signature verification
+  const { secret } = await getJsonSecret(HS_APP_SECRET_NAME);
   const ok = secret && verifyV3(event, secret);
 
   if (!ok) {
@@ -40,7 +45,7 @@ exports.handler = async function(event) {
   console.log('✅ hubspot webhook verified', (event.requestContext && event.requestContext.http && event.requestContext.http.method) || 'POST', event.rawPath);
 
   // quick processing: mint download_token when requested
-  const hsToken = process.env.HS_TOKEN; // must be set to call HubSpot CRM
+  const { token: hsToken } = await getJsonSecret(HS_TOKEN_NAME); // get token from secrets manager
   const base = 'https://api.hubapi.com';
 
   let events = [];
