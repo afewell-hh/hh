@@ -70,6 +70,150 @@ def fetch_checksum(checksum_url):
     except Exception:
         return None
 
+def install_oras_binary(prefix='/usr/local/bin', checksum=None):
+    """Install ORAS binary from official GitHub releases"""
+    arch = detect_arch()
+    if not arch:
+        print('unsupported architecture for ORAS binary installation')
+        return False
+
+    # Map our arch names to ORAS release naming
+    oras_arch = arch.replace('-', '_')  # linux-amd64 -> linux_amd64, linux-arm64 -> linux_arm64
+    oras_version = 'v1.3.0'
+    tarball_name = f'oras_{oras_version[1:]}_{oras_arch}.tar.gz'  # oras_1.3.0_linux_amd64.tar.gz
+    download_url = f'https://github.com/oras-project/oras/releases/download/{oras_version}/{tarball_name}'
+
+    binary_path = os.path.join(prefix, 'oras')
+
+    # Check if ORAS is already installed as proper binary
+    if os.path.exists(binary_path):
+        try:
+            result = subprocess.run(['file', binary_path], capture_output=True, text=True, timeout=5)
+            if 'ELF 64-bit' in result.stdout:
+                print(f'ORAS binary already installed at {binary_path}')
+                return True
+            else:
+                print(f'existing ORAS at {binary_path} is not a proper binary, replacing...')
+        except Exception:
+            pass
+
+    print(f'downloading ORAS {oras_version} for {oras_arch}')
+
+    # Download and extract
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tarball_path = os.path.join(tmpdir, tarball_name)
+            print(f'downloading {download_url}')
+            subprocess.check_call(['curl', '-fsSL', download_url, '-o', tarball_path])
+
+            # Verify checksum if provided
+            if checksum:
+                print('verifying ORAS checksum')
+                with open(tarball_path, 'rb') as f:
+                    h = hashlib.sha256(f.read()).hexdigest()
+                if h.lower() != checksum.lower():
+                    print(f'checksum mismatch for ORAS: {h} != {checksum}')
+                    return False
+            else:
+                print('no checksum provided for ORAS; skipping verification')
+
+            # Extract tarball
+            print('extracting ORAS binary')
+            subprocess.check_call(['tar', 'xzf', tarball_path, '-C', tmpdir])
+
+            extracted_binary = os.path.join(tmpdir, 'oras')
+            if not os.path.exists(extracted_binary):
+                print('ORAS binary not found in extracted tarball')
+                return False
+
+            # Install binary
+            if not os.access(prefix, os.W_OK):
+                if shutil.which('sudo'):
+                    print(f'installing ORAS to {binary_path} (with sudo)')
+                    subprocess.check_call(['sudo', 'install', '-m', '0755', extracted_binary, binary_path])
+                else:
+                    # Fallback to ~/.local/bin
+                    fallback_prefix = os.path.join(os.path.expanduser('~'), '.local', 'bin')
+                    os.makedirs(fallback_prefix, exist_ok=True)
+                    fallback_path = os.path.join(fallback_prefix, 'oras')
+                    shutil.copy2(extracted_binary, fallback_path)
+                    os.chmod(fallback_path, 0o755)
+                    print(f'installed ORAS to {fallback_path}')
+                    print(f'add {fallback_prefix} to your PATH: export PATH={fallback_prefix}:$PATH')
+            else:
+                shutil.copy2(extracted_binary, binary_path)
+                os.chmod(binary_path, 0o755)
+                print(f'installed ORAS to {binary_path}')
+
+            return True
+
+    except subprocess.CalledProcessError as e:
+        print(f'ORAS installation failed: {e}')
+        return False
+    except Exception as e:
+        print(f'error installing ORAS: {e}')
+        return False
+
+def install_hhfab_via_oras(prefix='/usr/local/bin'):
+    """Install hhfab using ORAS from GHCR"""
+    # Ensure ORAS is available first
+    oras_binary = shutil.which('oras')
+    if not oras_binary:
+        print('ORAS not found; please install ORAS first')
+        return False
+
+    arch = detect_arch()
+    if not arch:
+        print('unsupported architecture for hhfab installation')
+        return False
+
+    # Map our arch names to hhfab image naming
+    hhfab_arch = arch  # Keep as linux-amd64 or linux-arm64
+    hhfab_version = 'v0.41.3'
+    hhfab_image = f'ghcr.io/githedgehog/fabricator/hhfab-{hhfab_arch}:{hhfab_version}'
+
+    binary_path = os.path.join(prefix, 'hhfab')
+
+    print(f'installing hhfab {hhfab_version} for {hhfab_arch} using ORAS')
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            print(f'pulling {hhfab_image}')
+            subprocess.check_call(['oras', 'pull', '-o', tmpdir, hhfab_image])
+
+            extracted_binary = os.path.join(tmpdir, 'hhfab')
+            if not os.path.exists(extracted_binary):
+                print('hhfab binary not found in pulled artifact')
+                return False
+
+            # Install binary
+            if not os.access(prefix, os.W_OK):
+                if shutil.which('sudo'):
+                    print(f'installing hhfab to {binary_path} (with sudo)')
+                    subprocess.check_call(['sudo', 'install', '-m', '0755', extracted_binary, binary_path])
+                else:
+                    # Fallback to ~/.local/bin
+                    fallback_prefix = os.path.join(os.path.expanduser('~'), '.local', 'bin')
+                    os.makedirs(fallback_prefix, exist_ok=True)
+                    fallback_path = os.path.join(fallback_prefix, 'hhfab')
+                    shutil.copy2(extracted_binary, fallback_path)
+                    os.chmod(fallback_path, 0o755)
+                    print(f'installed hhfab to {fallback_path}')
+                    print(f'add {fallback_prefix} to your PATH: export PATH={fallback_prefix}:$PATH')
+            else:
+                shutil.copy2(extracted_binary, binary_path)
+                os.chmod(binary_path, 0o755)
+                print(f'installed hhfab to {binary_path}')
+
+            return True
+
+    except subprocess.CalledProcessError as e:
+        print(f'hhfab installation failed: {e}')
+        return False
+    except Exception as e:
+        print(f'error installing hhfab: {e}')
+        return False
+
 def download_and_install_binary(url, binary_name, prefix, checksum=None, retry_count=1):
     """Download binary to temp file and install with proper permissions"""
     dest = os.path.join(prefix, binary_name)
@@ -654,7 +798,11 @@ def cmd_doctor(args):
         print(f'❌ Error testing public pull: {e}')
 
 def cmd_login(args):
-    token = args.code
+    # Support both positional and --code arguments
+    # --code flag takes precedence over positional argument
+    token = getattr(args, 'code', None)  # This gets the --code flag
+    if not token:
+        token = getattr(args, 'pairing_code', None)  # This gets the positional argument
     if not token:
         token = input('pairing code: ').strip()
     portal = args.portal or DEFAULT_PORTAL
@@ -707,24 +855,17 @@ def cmd_download(args):
     # merge docker config non-destructively
     merge_docker_credhelper(system_mode)
 
-    # install hhfab and oras
-    if not args.no_hhfab:
-        if not download_and_install_binary(
-            args.hhfab_url,
-            'hhfab',
-            args.prefix,
-            checksum=args.sha256_hhfab,
-            retry_count=1
+    # install oras first (required for hhfab installation)
+    if not args.no_oras:
+        if not install_oras_binary(
+            prefix=args.prefix,
+            checksum=args.sha256_oras
         ):
             return EC_BIN_INSTALL_FAILED
-    if not args.no_oras:
-        if not download_and_install_binary(
-            args.oras_url,
-            'oras',
-            args.prefix,
-            checksum=args.sha256_oras,
-            retry_count=1
-        ):
+
+    # install hhfab via oras
+    if not args.no_hhfab:
+        if not install_hhfab_via_oras(prefix=args.prefix):
             return EC_BIN_INSTALL_FAILED
 
     # sanity pull
@@ -758,7 +899,8 @@ def main():
     p_doctor.set_defaults(func=cmd_doctor)
 
     p_login = sp.add_parser('login')
-    p_login.add_argument('--code')
+    p_login.add_argument('pairing_code', nargs='?', help='Pairing code (positional argument)')
+    p_login.add_argument('--code', help='Pairing code (--code flag, overrides positional)')
     p_login.add_argument('--portal')
     p_login.add_argument('--system', action='store_true', help='Write config to /etc/hh/config.json for sudo docker support')
     p_login.set_defaults(func=cmd_login)
