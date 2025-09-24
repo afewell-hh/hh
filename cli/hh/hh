@@ -795,10 +795,10 @@ def cmd_download(args):
         print('no ~/.hh/config.json; running login')
         cmd_login(args)
         cfg = read_config()
-    token = cfg.get('download_token')
-    portal = cfg.get('portal_base', DEFAULT_PORTAL)
+    token = cfg.get('token') or cfg.get('download_token')
+    portal = cfg.get('lease_url', DEFAULT_PORTAL).replace('/lease', '') or cfg.get('portal_base', DEFAULT_PORTAL)
     if not token:
-        print('no download_token in ~/.hh/config.json; run hh login first')
+        print('no token in ~/.hh/config.json; run hh login first')
         return 1
 
     system_mode = getattr(args, 'system', False)
