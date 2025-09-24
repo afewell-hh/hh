@@ -15,7 +15,7 @@ DEFAULT_PORTAL = 'https://pc4x1xgehc.execute-api.us-west-2.amazonaws.com'
 DEFAULT_HELPER_BASE_URL = 'https://github.com/afewell-hh/hh/releases/latest/download'
 
 # Version info - populated by CI build
-HH_VERSION = os.environ.get('HH_BUILD_VERSION', 'v0.1.6-dev')
+HH_VERSION = os.environ.get('HH_BUILD_VERSION', 'v0.1.8')
 HH_COMMIT = os.environ.get('HH_BUILD_COMMIT', 'unknown')
 HH_BUILD_DATE = os.environ.get('HH_BUILD_DATE', 'unknown')
 
@@ -135,12 +135,39 @@ def download_and_install_binary(url, binary_name, prefix, checksum=None, retry_c
 
 def write_config(portal_base, token, system_mode=False):
     p = ensure_hh_dir()
-    cfg = {'portal_base': portal_base, 'download_token': token}
+    user_config_path = os.path.join(p, 'config.json')
+
+    # Try to read existing config to preserve edge_auth
+    existing_edge_auth = None
+    if os.path.exists(user_config_path):
+        try:
+            with open(user_config_path, 'r') as f:
+                existing_cfg = json.load(f)
+                existing_edge_auth = existing_cfg.get('edge_auth')
+                # Debug output
+                if os.getenv('HH_DEBUG') == '1':
+                    print(f'DEBUG: Found existing edge_auth: {existing_edge_auth}', file=sys.stderr)
+        except Exception as e:
+            if os.getenv('HH_DEBUG') == '1':
+                print(f'DEBUG: Error reading config: {e}', file=sys.stderr)
+            pass  # ignore errors reading existing config
+
+    # Write all required keys for both backward compatibility and helper support
+    final_edge_auth = existing_edge_auth if existing_edge_auth else token
+    if os.getenv('HH_DEBUG') == '1':
+        print(f'DEBUG: Using edge_auth: {final_edge_auth} (existing: {existing_edge_auth}, token: {token})', file=sys.stderr)
+
+    cfg = {
+        'portal_base': portal_base,       # legacy compatibility
+        'download_token': token,          # legacy compatibility
+        'lease_url': f"{portal_base}/lease",  # required for helper
+        'edge_auth': final_edge_auth,     # preserve existing edge_auth if it exists
+        'token': token                    # required for helper
+    }
 
     # Always write user config
-    user_config_path = os.path.join(p, 'config.json')
     with open(user_config_path, 'w') as f:
-        json.dump(cfg, f)
+        json.dump(cfg, f, indent=2)
     print('wrote', user_config_path)
 
     # Also write system config if system mode
@@ -479,10 +506,152 @@ def run_oras_sanity_check():
 def cmd_version(args):
     """Print version information"""
     print(f'hh {HH_VERSION}')
+
+    # Show commit info
+    commit = HH_COMMIT
+    if commit == 'unknown':
+        try:
+            # Try to get current git commit
+            result = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                commit = result.stdout.strip()
+        except:
+            pass
+
+    if commit != 'unknown':
+        print(f'commit: {commit}')
+
+    # Show build date
+    build_date = HH_BUILD_DATE
+    if build_date == 'unknown':
+        try:
+            from datetime import datetime
+            build_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
+        except:
+            pass
+
+    if build_date != 'unknown':
+        print(f'built: {build_date}')
+
+def cmd_doctor(args):
+    """Run diagnostic checks"""
+    print(f'hh {HH_VERSION}')
     if HH_COMMIT != 'unknown':
         print(f'commit: {HH_COMMIT}')
-    if HH_BUILD_DATE != 'unknown':
-        print(f'built: {HH_BUILD_DATE}')
+
+    print('')
+
+    # Check Docker
+    print('🔍 Checking Docker...')
+    ok, reason = check_docker()
+    if ok:
+        print('✅ Docker is accessible')
+    else:
+        if reason == 'missing':
+            print('❌ Docker not found - please install Docker')
+        elif reason == 'permission':
+            print('⚠️  Docker requires elevated privileges (consider: sudo usermod -aG docker $USER)')
+        else:
+            print(f'❌ Docker check failed: {reason}')
+
+    # Check credential helper
+    print('')
+    print('🔍 Checking credential helper...')
+    helper_path = shutil.which('docker-credential-hh')
+    if helper_path:
+        print(f'✅ Helper found at: {helper_path}')
+    else:
+        print('❌ docker-credential-hh not found in PATH')
+
+    # Check config
+    print('')
+    print('🔍 Checking configuration...')
+    config_paths = [
+        os.path.join(os.path.expanduser('~'), '.hh', 'config.json'),
+        '/etc/hh/config.json'
+    ]
+
+    config_found = False
+    for config_path in config_paths:
+        if os.path.exists(config_path):
+            print(f'✅ Config found: {config_path}')
+            try:
+                with open(config_path, 'r') as f:
+                    cfg = json.load(f)
+                required_keys = ['lease_url', 'edge_auth', 'token']
+                missing_keys = [k for k in required_keys if not cfg.get(k)]
+                if missing_keys:
+                    print(f'⚠️  Missing config keys: {", ".join(missing_keys)}')
+                else:
+                    print('✅ All required config keys present')
+                config_found = True
+                break
+            except Exception as e:
+                print(f'❌ Error reading config: {e}')
+
+    if not config_found:
+        print('❌ No config file found - run "hh login" first')
+
+    # Test credential helper
+    if helper_path and config_found:
+        print('')
+        print('🔍 Testing credential helper...')
+        try:
+            result = subprocess.run(
+                [helper_path, 'get'],
+                input='ghcr.io\n',
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                print('✅ Helper returned credentials')
+            elif result.returncode == 0 and not result.stdout.strip():
+                print('⚠️  Helper returned no credentials (anonymous fallback)')
+            else:
+                print(f'❌ Helper failed with exit code {result.returncode}')
+        except Exception as e:
+            print(f'❌ Error testing helper: {e}')
+
+    # Check ORAS
+    print('')
+    print('🔍 Checking ORAS...')
+    oras_path = shutil.which('oras')
+    if oras_path:
+        try:
+            result = subprocess.run([oras_path, 'version'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                print(f'✅ ORAS found at: {oras_path}')
+                # Check if it's an ELF binary
+                file_result = subprocess.run(['file', oras_path], capture_output=True, text=True)
+                if 'ELF' in file_result.stdout:
+                    print('✅ ORAS is a proper binary (not a script)')
+                else:
+                    print('⚠️  ORAS appears to be a script, not a binary')
+            else:
+                print(f'❌ ORAS failed to run: {result.stderr}')
+        except Exception as e:
+            print(f'❌ Error checking ORAS: {e}')
+    else:
+        print('⚠️  ORAS not found in PATH')
+
+    # Test public pull
+    print('')
+    print('🔍 Testing public registry access...')
+    try:
+        result = subprocess.run(
+            ['docker', 'pull', 'hello-world'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if result.returncode == 0:
+            print('✅ Public Docker pull works')
+        else:
+            print('❌ Public Docker pull failed')
+    except Exception as e:
+        print(f'❌ Error testing public pull: {e}')
 
 def cmd_login(args):
     token = args.code
@@ -584,6 +753,9 @@ def main():
 
     p_version = sp.add_parser('version', help='Show version information')
     p_version.set_defaults(func=cmd_version)
+
+    p_doctor = sp.add_parser('doctor', help='Run diagnostic checks')
+    p_doctor.set_defaults(func=cmd_doctor)
 
     p_login = sp.add_parser('login')
     p_login.add_argument('--code')

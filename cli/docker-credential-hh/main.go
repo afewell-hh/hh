@@ -77,20 +77,23 @@ func loadConfig() (*Config, error) {
         f.Close()
 
         // Normalize config fields - support multiple field names for backwards compatibility
-        if c.PortalBase == "" {
-            if c.LeaseURL != "" {
-                c.PortalBase = c.LeaseURL
-            } else if c.BaseURL != "" {
+        // Prefer the new field names first
+        if c.LeaseURL != "" {
+            c.PortalBase = c.LeaseURL
+        } else if c.PortalBase == "" {
+            if c.BaseURL != "" {
                 c.PortalBase = c.BaseURL
             } else if c.URL != "" {
                 c.PortalBase = c.URL
             }
         }
 
-        if c.DownloadToken == "" {
-            if c.Token != "" {
-                c.DownloadToken = c.Token
-            } else if c.Code != "" {
+        if c.EdgeAuth != "" {
+            c.DownloadToken = c.EdgeAuth
+        } else if c.Token != "" {
+            c.DownloadToken = c.Token
+        } else if c.DownloadToken == "" {
+            if c.Code != "" {
                 c.DownloadToken = c.Code
             }
         }
@@ -133,7 +136,14 @@ func isGHCR(server string) bool {
 }
 
 func getLease(c *Config) (map[string]string, int, error) {
-    url := strings.TrimRight(c.PortalBase, "/") + "/lease"
+    // If PortalBase already contains /lease, use it directly, otherwise append /lease
+    var url string
+    if strings.HasSuffix(c.PortalBase, "/lease") {
+        url = c.PortalBase
+    } else {
+        url = strings.TrimRight(c.PortalBase, "/") + "/lease"
+    }
+
     req, err := http.NewRequest("POST", url, nil)
     if err != nil {
         return nil, 0, err
@@ -156,35 +166,50 @@ func getLease(c *Config) (map[string]string, int, error) {
     return out, resp.StatusCode, nil
 }
 
+func debugf(format string, args ...interface{}) {
+    if os.Getenv("HH_DEBUG") == "1" {
+        fmt.Fprintf(os.Stderr, "debug: "+format+"\n", args...)
+    }
+}
+
 func cmdGet() int {
     server, err := readStdin()
     if err != nil {
-        // Minimal stderr output for ORAS compatibility
-        fmt.Fprintln(os.Stderr, "failed read stdin")
+        debugf("failed to read stdin: %v", err)
         return 1
     }
 
+    debugf("server input: %s", server)
+
     if !isGHCR(server) {
-        // Exit quietly for non-GHCR servers to allow fallback
+        debugf("not a GHCR server, exiting quietly")
         return 1
     }
 
     cfg, err := loadConfig()
     if err != nil {
-        // No config available - exit quietly to allow anonymous fallback
+        debugf("failed to load config: %v", err)
         return 1
     }
 
+    debugf("loaded config with portal_base: %s", cfg.PortalBase)
+
     creds, status, err := getLease(cfg)
     if err != nil {
+        debugf("lease failed with status %d: %v", status, err)
         // For authentication failures (401/403/404), exit quietly to allow anonymous fallback
         if status == 401 || status == 403 || status == 404 || status >= 400 {
-            return 1
+            debugf("auth failure, allowing anonymous fallback")
+            // Return exit 0 with no output to allow anonymous fallback
+            return 0
         }
         // For other errors (network, etc.), provide minimal feedback
-        fmt.Fprintln(os.Stderr, "lease error")
-        return 1
+        debugf("network/other error during lease")
+        // Return exit 0 with no output to allow anonymous fallback
+        return 0
     }
+
+    debugf("lease successful, returning credentials")
 
     // Only print JSON on success - this is what Docker/ORAS expects
     out := map[string]string{"Username": creds["Username"], "Secret": creds["Secret"]}
