@@ -107,10 +107,6 @@ func loadConfig() (*Config, error) {
             lastErr = errors.New("missing download_token/token/code in config")
             continue
         }
-        if c.EdgeAuth == "" {
-            lastErr = errors.New("missing edge_auth in config")
-            continue
-        }
 
         return &c, nil
     }
@@ -152,7 +148,6 @@ func getLease(c *Config) (map[string]string, int, error) {
     if err != nil {
         return nil, 0, err
     }
-    req.Header.Set("X-Edge-Auth", c.EdgeAuth)
     req.Header.Set("X-Download-Token", c.DownloadToken)
     client := &http.Client{}
     resp, err := client.Do(req)
