@@ -3,7 +3,9 @@ set -euo pipefail
 
 REPO="afewell-hh/hh"
 PREFIX="${HH_PREFIX:-/usr/local/bin}"
-HH_URL="https://github.com/${REPO}/releases/latest/download/hh"
+# Use specific v0.1.12 release for stable rollout
+HH_VERSION="${HH_VERSION:-v0.1.12}"
+HH_URL="https://github.com/${REPO}/releases/download/${HH_VERSION}/hh"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "error: $1 is required"; exit 1; }; }
 need curl
@@ -16,7 +18,7 @@ fi
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 dst="${PREFIX}/hh"
 
-echo "Downloading hh from: $HH_URL"
+echo "Downloading hh ${HH_VERSION} from: $HH_URL"
 curl -fsSL "$HH_URL" -o "${tmp}/hh"
 chmod +x "${tmp}/hh"
 
