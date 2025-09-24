@@ -281,32 +281,10 @@ def write_config(portal_base, token, system_mode=False):
     p = ensure_hh_dir()
     user_config_path = os.path.join(p, 'config.json')
 
-    # Try to read existing config to preserve edge_auth
-    existing_edge_auth = None
-    if os.path.exists(user_config_path):
-        try:
-            with open(user_config_path, 'r') as f:
-                existing_cfg = json.load(f)
-                existing_edge_auth = existing_cfg.get('edge_auth')
-                # Debug output
-                if os.getenv('HH_DEBUG') == '1':
-                    print(f'DEBUG: Found existing edge_auth: {existing_edge_auth}', file=sys.stderr)
-        except Exception as e:
-            if os.getenv('HH_DEBUG') == '1':
-                print(f'DEBUG: Error reading config: {e}', file=sys.stderr)
-            pass  # ignore errors reading existing config
-
-    # Write all required keys for both backward compatibility and helper support
-    final_edge_auth = existing_edge_auth if existing_edge_auth else token
-    if os.getenv('HH_DEBUG') == '1':
-        print(f'DEBUG: Using edge_auth: {final_edge_auth} (existing: {existing_edge_auth}, token: {token})', file=sys.stderr)
-
+    # Minimal, reliable config - only write required fields
     cfg = {
-        'portal_base': portal_base,       # legacy compatibility
-        'download_token': token,          # legacy compatibility
         'lease_url': f"{portal_base}/lease",  # required for helper
-        'edge_auth': final_edge_auth,     # preserve existing edge_auth if it exists
-        'token': token                    # required for helper
+        'token': token                        # required for helper
     }
 
     # Always write user config
@@ -322,12 +300,10 @@ def write_system_config(portal_base, token):
     system_dir = '/etc/hh'
     system_config_path = os.path.join(system_dir, 'config.json')
 
-    # Prepare config with normalized field names for system mode
+    # Minimal, reliable system config - only write required fields
     cfg = {
-        'edge_auth': token,  # Use edge_auth for system config
-        'lease_url': portal_base,  # Use lease_url for system config
-        'token': token,  # Include token for backwards compatibility
-        'portal_base': portal_base  # Include portal_base for backwards compatibility
+        'lease_url': f"{portal_base}/lease",  # required for helper
+        'token': token                        # required for helper
     }
 
     try:
