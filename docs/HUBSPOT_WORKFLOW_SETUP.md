@@ -67,38 +67,31 @@ Gives webhook time to write the `download_token`.
 
 #### Email Configuration
 
-**Subject Line**:
+**Email Template (use exactly as provided):**
+
+**Subject**: Your Hedgehog download is ready
+
+**Body**:
 ```
-Your Hedgehog download code & setup
-```
+Hi {{ contact.firstname | default('there') }},
 
-**Email Body**:
-```html
-Hi {{ contact.firstname|default:"there" }},
+Here's your pairing code for authenticated downloads:
 
-Your pairing code: **{{ contact.download_token }}**
+  {{ contact.download_token }}
 
-## Quick Install & Setup
+Get started:
+  1) Install hh:
+     curl -fsSL https://github.com/afewell-hh/hh/releases/download/v0.1.12/install-hh.sh | bash
+  2) Log in with your code:
+     hh login --code "{{ contact.download_token }}"
+  3) Install helper and tools:
+     hh download
 
-1. **Install**:
-   ```bash
-   curl -fsSL https://github.com/afewell-hh/hh/releases/latest/download/install-hh.sh | bash
-   ```
+Next:
+  mkdir -p ~/hhfab-dir && cd ~/hhfab-dir
+  hhfab init --dev && hhfab vlab gen && hhfab build
 
-2. **Login with your code**:
-   ```bash
-   hh login --code "{{ contact.download_token }}"
-   ```
-
-3. **Download**:
-   ```bash
-   hh download
-   ```
-
-Need help? Reply to this email and we'll assist you.
-
----
-**Note**: Your pairing code is unique and expires after use. Keep it secure.
+Need help? Reply to this email with any error messages or run "hh doctor" and share the output.
 ```
 
 ### 6. Add If/Then Guard (Fallback Email)

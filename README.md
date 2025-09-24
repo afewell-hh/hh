@@ -1,114 +1,197 @@
-# hh
-installer
+# hh — Hedgehog download & setup utility
+
+Installs the Docker credential helper and (optionally) hhfab, enabling authenticated pulls from GHCR for Hedgehog builds.
+
+## Table of Contents
+
+- [What is this?](#what-is-this)
+- [Quickstart](#quickstart)
+- [Prerequisites](#prerequisites)
+- [Relationship to hhfab](#relationship-to-hhfab)
+- [Modes](#modes)
+- [hh --help and hh --version](#hh---help-and-hh---version)
+- [Diagnostics](#diagnostics)
+- [Troubleshooting](#troubleshooting)
+- [Security model](#security-model)
+- [Uninstall](#uninstall)
+- [Support](#support)
+- [Changelog & License](#changelog--license)
+
+## What is this?
+
+• Installs a Docker credential helper for ghcr.io
+• Handles authenticated pulls using your pairing code (token)
+• Optionally installs hhfab and oras
+• Works on Ubuntu 22.04/24.04; both "user" and "system (sudo)" modes
 
 ## Quickstart
 
-1) Install hh CLI
+### Pinned release (current):
 
-	curl -fsSL https://github.com/afewell-hh/hh/releases/latest/download/install-hh.sh | bash
+```bash
+curl -fsSL https://github.com/afewell-hh/hh/releases/download/v0.1.12/install-hh.sh | bash
+hh --version
+hh login --code "<YOUR_PAIRING_CODE>"
+hh download
+```
 
-2) Login with pairing code
+### Optional: latest track
 
-	hh login --code "YOUR_PAIRING_CODE"
+```bash
+HH_VERSION=latest curl -fsSL https://github.com/afewell-hh/hh/releases/latest/download/install-hh.sh | bash
+```
 
-	This writes `~/.hh/config.json` with your `lease_url` and `token`.
+## Prerequisites
 
-	To verify installation: `hh --version` or `hh version`
+Docker installed; if Docker requires sudo, show:
 
-3) Install helper and optional tools
+```bash
+sudo usermod -aG docker $USER && newgrp docker
+```
 
-	hh download
+`curl` and `jq` recommended (for diagnostics).
 
-	By default this will:
-	- Auto-download the Docker credential helper from GitHub releases if not present locally
-	- Install architecture-specific binaries (linux-amd64, linux-arm64) with shell script fallback
-	- Install `hhfab` and `oras` tools to `/usr/local/bin`
-	- Configure Docker credential helpers for `ghcr.io`
+## Relationship to hhfab
 
-4) Next steps
+`hh` bootstraps auth and can install hhfab; you'll typically:
 
-	mkdir -p ~/hhfab-dir && cd ~/hhfab-dir
-	hhfab init --dev
-	hhfab vlab gen
-	hhfab build
+```bash
+mkdir -p ~/hhfab-dir && cd ~/hhfab-dir
+hhfab init --dev
+hhfab vlab gen
+hhfab build
+```
 
-## Docker permissions
+## Modes
 
-### Preferred: Sudoless Docker (recommended)
+**User mode (recommended):** installs helper under $HOME / user Docker config.
 
-If Docker requires elevated privileges (permission denied on socket), add your user to the docker group:
+**System mode (hardened/CI):**
 
-	sudo usermod -aG docker $USER && newgrp docker
+```bash
+hh login --system --code "<YOUR_PAIRING_CODE>"
+hh download --system
+# Then use sudo docker ... if your environment requires it
+```
 
-Then run `hh download` normally.
+## hh --help and hh --version
 
-### Alternative: System mode for sudo-required environments
+### Sample hh --version output (v0.1.12):
 
-For environments where sudo is required for Docker (CI, hardened servers), use system mode:
+```
+hh v0.1.12
+commit: fef0db1
+built: 2025-09-24T15:23:02Z
+```
 
-	hh login --system --code "YOUR_PAIRING_CODE"
-	hh download --system
+### Sample hh --help output:
 
-System mode:
-- Writes config to `/etc/hh/config.json` (accessible to root)
-- Installs credential helper to `/usr/local/bin`
-- Configures Docker for both user and root (`/root/.docker/config.json`)
-- Supports `sudo docker pull` commands
+```
+usage: hh [-h] [--version] {version,doctor,login,download} ...
 
-## Configuration
+positional arguments:
+  {version,doctor,login,download}
+    version             Show version information
+    doctor              Run diagnostic checks
+    login
+    download            Install helper and optional binaries; see examples below
 
-The credential helper searches for configuration in this order:
+options:
+  -h, --help            show this help message and exit
+  --version             Show version information
+```
 
-1. `$HH_CONFIG` (if set)
-2. `/etc/hh/config.json` (system)
-3. `$XDG_CONFIG_HOME/hh/config.json` (if set)
-4. `$HOME/.hh/config.json` (user)
+**Note:** Use `hh doctor` for comprehensive system diagnostics.
 
-## Auto-Install Behavior
+## Diagnostics
 
-`hh download` automatically fetches the credential helper from GitHub releases if not found locally:
+### Sample hh doctor output:
 
-1. **Architecture Detection**: Detects system architecture (x86_64 → linux-amd64, aarch64 → linux-arm64)
-2. **Binary Download**: Attempts to download arch-specific binary: `docker-credential-hh-linux-amd64` or `docker-credential-hh-linux-arm64`
-3. **Checksum Verification**: Verifies download integrity using `.sha256` files when available
-4. **Shell Fallback**: Falls back to universal `docker-credential-hh.sh` if arch-specific binary unavailable
-5. **Installation**: Installs to `/usr/local/bin` (requires sudo) or `~/.local/bin` (with PATH hint) as fallback
+```
+hh v0.1.12
+commit: fef0db1
 
-No extra flags required - just run `hh download` and it handles everything automatically.
+🔍 Checking Docker...
+✅ Docker is accessible
 
-## Examples
+🔍 Checking credential helper...
+✅ Helper found at: /usr/local/bin/docker-credential-hh
 
-### Install only the Docker helper
-	hh download --no-hhfab --no-oras
+🔍 Checking configuration...
+✅ Config found: /home/user/.hh/config.json
+✅ All required config keys present
 
-### Test with a specific image
-	hh download --sanity ghcr.io/ORG/IMAGE:TAG
+🔍 Testing credential helper...
+✅ Helper returned credentials
 
-### System mode for CI/hardened environments
-	hh login --system --code "CODE"
-	hh download --system
+🔍 Checking ORAS...
+✅ ORAS found at: /usr/local/bin/oras
+✅ ORAS is a proper binary (not a script)
 
-### Manual helper download (override auto-install)
-	hh download --helper-url https://github.com/afewell-hh/hh/releases/latest/download/docker-credential-hh-linux-amd64 --sha256-helper <checksum>
+🔍 Testing public registry access...
+✅ Public Docker pull works
+```
 
-### Version information
-	hh --version
-	hh version
+## Troubleshooting
 
-## Security
+### Helper returns no output / anonymous fallback
+Ensure `~/.hh/config.json` has `lease_url` and `token`. Run `hh login --code "..."` again.
 
-### How secrets are stored
+```bash
+# Test helper directly
+echo -n ghcr.io | docker-credential-hh get
+```
 
-All sensitive credentials are stored securely in AWS Secrets Manager:
-- HubSpot application secrets are stored at `/hh/prod/hubspot/*`
-- GitHub Container Registry (GHCR) credentials are stored at `/hh/prod/ghcr/*`
-- Lambda functions retrieve secrets at runtime using IAM roles
-- No plaintext secrets are stored in Lambda environment variables
-- Supports zero-downtime secret rotation without redeployment
-- To force immediate refresh after rotation, update `CACHE_BUSTER` env on the Lambda
+If this prints nothing and returns exit code 0, the helper is in anonymous fallback mode.
 
-### Rate limiting
+### oras is a shell script / corrupted
+`hh download` now installs the official ELF binary; if broken, run:
 
-The API Gateway has throttling configured to prevent abuse:
-- Burst limit: 50 requests per second
-- Sustained rate: 25 requests per second
+```bash
+sudo rm -f /usr/local/bin/oras
+hh download
+```
+
+### Docker needs sudo
+Add user to docker group or run system mode:
+
+```bash
+# Option A: Fix permissions (recommended)
+sudo usermod -aG docker $USER && newgrp docker
+
+# Option B: Use system mode
+hh login --system --code "<YOUR_PAIRING_CODE>"
+hh download --system
+```
+
+### hhfab init fails with GHCR 401/403
+Pairing code invalid/disabled; contact support.
+
+### HubSpot email didn't arrive / token empty
+Wait 2–3 min or request re-send.
+
+## Security model
+
+• Pairing code is stored locally; helper exchanges it for short-use credentials via /lease
+• Secrets are managed in AWS Secrets Manager (no plaintext in Lambda envs)
+• No PII stored by hh; logs mask emails
+
+## Uninstall
+
+```bash
+# remove helper & config
+rm -f ~/.local/bin/docker-credential-hh ~/.hh/config.json
+# optionally revert ~/.docker/config.json credHelpers entry for ghcr.io
+```
+
+## Support
+
+For issues, please open a GitHub issue with the following information:
+
+- Output of `hh doctor`
+- Output of `docker-credential-hh get` (if applicable)
+- Any error messages or logs
+
+## Changelog & License
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.

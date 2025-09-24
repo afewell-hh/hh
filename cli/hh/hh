@@ -855,12 +855,7 @@ def cmd_download(args):
         run_oras_sanity_check()  # Always continue regardless of result
 
     # friendly message
-    print('\n✅ hh is ready.')
-    print('\nNext steps:')
-    print('  mkdir -p ~/hhfab-dir && cd ~/hhfab-dir')
-    print('  hhfab init --dev')
-    print('  hhfab vlab gen')
-    print('  hhfab build')
+    print('hhfab successfully downloaded and authenticated')
     return EC_SUCCESS
 
 def main():
