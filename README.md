@@ -11,7 +11,7 @@ installer
 
 	hh login --code "YOUR_PAIRING_CODE"
 
-	This writes `~/.hh/config.json` with your `portal_base` and `download_token`.
+	This writes `~/.hh/config.json` with your `lease_url` and `token`.
 
 	To verify installation: `hh --version` or `hh version`
 
@@ -94,3 +94,14 @@ No extra flags required - just run `hh download` and it handles everything autom
 ### Version information
 	hh --version
 	hh version
+
+## Security
+
+### How secrets are stored
+
+All sensitive credentials are stored securely in AWS Secrets Manager:
+- HubSpot application secrets are stored at `/hh/prod/hubspot/*`
+- GitHub Container Registry (GHCR) credentials are stored at `/hh/prod/ghcr/*`
+- Lambda functions retrieve secrets at runtime using IAM roles
+- No plaintext secrets are stored in Lambda environment variables
+- Supports zero-downtime secret rotation without redeployment
