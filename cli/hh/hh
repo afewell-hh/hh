@@ -16,8 +16,8 @@ DEFAULT_HELPER_BASE_URL = 'https://github.com/afewell-hh/hh/releases/latest/down
 
 # Version info - populated by CI build
 HH_VERSION = os.environ.get('HH_BUILD_VERSION', 'v0.1.12')
-HH_COMMIT = os.environ.get('HH_BUILD_COMMIT', 'unknown')
-HH_BUILD_DATE = os.environ.get('HH_BUILD_DATE', 'unknown')
+HH_COMMIT = os.environ.get('HH_BUILD_COMMIT', 'fef0db1')
+HH_BUILD_DATE = os.environ.get('HH_BUILD_DATE', '2025-09-24T15:23:02Z')
 
 # exit codes
 EC_SUCCESS = 0

@@ -82,9 +82,10 @@ jobs:
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           # Replace the version placeholders in the hh script
-          sed -i "s/HH_VERSION = os.environ.get('HH_BUILD_VERSION', 'v0.1.6-dev')/HH_VERSION = os.environ.get('HH_BUILD_VERSION', '${VERSION}')/" cli/hh/hh
-          sed -i "s/HH_COMMIT = os.environ.get('HH_BUILD_COMMIT', 'unknown')/HH_COMMIT = os.environ.get('HH_BUILD_COMMIT', '${COMMIT}')/" cli/hh/hh
-          sed -i "s/HH_BUILD_DATE = os.environ.get('HH_BUILD_DATE', 'unknown')/HH_BUILD_DATE = os.environ.get('HH_BUILD_DATE', '${BUILD_DATE}')/" cli/hh/hh
+          # Use a more flexible pattern that matches any existing version
+          sed -i "s/HH_VERSION = os.environ.get('HH_BUILD_VERSION', '[^']*')/HH_VERSION = os.environ.get('HH_BUILD_VERSION', '${VERSION}')/" cli/hh/hh
+          sed -i "s/HH_COMMIT = os.environ.get('HH_BUILD_COMMIT', '[^']*')/HH_COMMIT = os.environ.get('HH_BUILD_COMMIT', '${COMMIT}')/" cli/hh/hh
+          sed -i "s/HH_BUILD_DATE = os.environ.get('HH_BUILD_DATE', '[^']*')/HH_BUILD_DATE = os.environ.get('HH_BUILD_DATE', '${BUILD_DATE}')/" cli/hh/hh
       - name: Generate checksums
         run: |
           cd cli/docker-credential-hh
