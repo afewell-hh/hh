@@ -1,1 +1,9 @@
 .env
+.release-sandbox/
+.sandbox-e2e/
+cli/docker-credential-hh/docker-credential-hh-test
+cli/docker-credential-hh/test-helper
+infra/hh-lease-sm.zip
+infra/hh-webhook-sm.zip
+infra/lambda/*/node_modules/
+infra/lambda/*/package-lock.json
